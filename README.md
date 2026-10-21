@@ -45,6 +45,11 @@ Space plays, Esc goes back, **H** toggles HOLD.
   recent, settings) as JSON; audio stays on the phone.
 - Three display technologies (white OLED, amber LCD, grey e-ink) and three
   anodised editions (orange, mint, graphite).
+- Self test (SETTINGS → SYSTEM → SELF TEST): a lamp test with motion drives
+  every dot for 2.4 s and measures the real frame rate on this phone, then
+  lists what iOS granted: audio engine and session, lock-screen keys, haptics,
+  offline readiness, persistent storage. PASS needs ≥ 55 fps with at most 3 %
+  late frames.
 
 ## Accessibility
 
@@ -87,7 +92,27 @@ The service worker is versioned by the app version and only caches the shell.
   unless persistent storage is granted (it usually is for home-screen apps).
 - Portrait only is enforced by the page (a rotate card), not by iOS.
 
+## Performance
+
+The display is driven like a real panel: it is only redrawn when a dot, the
+theme, the brightness or the power state changes, and then only the rows that
+changed. Static screens cost nothing per frame; playback redraws the spectrum
+and the scrolling title. Measured with the iPhone 17 Pro viewport at 3×
+density: Chromium holds 60 fps with no late frames in the self test and during
+music + spectrum + encoder spinning. The test container's WebKitGTK renders
+in software without a GPU (a bare canvas page reaches 41 fps there); MP-1 runs
+at 60 fps there at 1× density. iOS Safari composites canvases on the GPU; run
+the self test on the phone for its number.
+
 ## Changelog
+
+**2.0.1**
+- Display redraws only on change, and only the changed rows (pixel-identical
+  to a full redraw in all three themes).
+- Self test with on-device frame-rate measurement.
+- Turning the encoder under HOLD gives a dull blip and a haptic tick.
+- Surface textures are seeded: the same unit on every launch.
+- Lists stay inside their bounds if they shrink; VoiceOver reads group headers.
 
 **2.0.0**
 - Body: symmetric 6-column grid, one top-left light source, anodised grain,

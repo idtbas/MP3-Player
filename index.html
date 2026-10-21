@@ -692,7 +692,7 @@ const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const lerp = (a, b, t) => a + (b - a) * t;
 const now = () => performance.now();
-const APP_VERSION = '2.0.0';
+const APP_VERSION = '2.0.1';
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)');
 
 /* ---------- 1. fit the device to the phone ------------------------------- */
@@ -720,17 +720,27 @@ fitDevice();
    Neutral-grey noise, blended soft-light, so one texture works on every
    edition: brushed streaks for the anodised body, speckle for the rubber. */
 const TEX_GRAIN = 256, TEX_RUBBER = 64;
-function noiseTexture(size, streak, amp) {
+/* seeded noise: every unit leaves the line with the same surface, launch after launch */
+function seeded(seed) {
+  return () => {
+    seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function noiseTexture(size, streak, amp, seed) {
+  const rnd = seeded(seed);
   const c = document.createElement('canvas');
   c.width = c.height = size;
   const g = c.getContext('2d');
   const img = g.createImageData(size, size);
   for (let y = 0; y < size; y++) {
-    const row = (Math.random() - 0.5) * streak;          // brushing runs along x
+    const row = (rnd() - 0.5) * streak;                  // brushing runs along x
     let run = 0;
     for (let x = 0; x < size; x++) {
-      run = run * 0.82 + (Math.random() - 0.5) * 0.18;     // long, soft streak noise
-      const v = 128 + (row + run * streak + (Math.random() - 0.5) * (1 - streak)) * amp;
+      run = run * 0.82 + (rnd() - 0.5) * 0.18;             // long, soft streak noise
+      const v = 128 + (row + run * streak + (rnd() - 0.5) * (1 - streak)) * amp;
       const i = (y * size + x) * 4;
       img.data[i] = img.data[i + 1] = img.data[i + 2] = clamp(v, 0, 255);
       img.data[i + 3] = 255;
@@ -739,8 +749,8 @@ function noiseTexture(size, streak, amp) {
   g.putImageData(img, 0, 0);
   return `url(${c.toDataURL()})`;
 }
-document.documentElement.style.setProperty('--grain', noiseTexture(TEX_GRAIN, 0.85, 46));
-document.documentElement.style.setProperty('--rubber', noiseTexture(TEX_RUBBER, 0, 70));
+document.documentElement.style.setProperty('--grain', noiseTexture(TEX_GRAIN, 0.85, 46, 0x4D50));
+document.documentElement.style.setProperty('--rubber', noiseTexture(TEX_RUBBER, 0, 70, 0x0001));
 
 /* ---------- 3. encoder scale (printed ticks) ---------------------------- */
 (function drawScale() {
@@ -1235,6 +1245,7 @@ const LCD = {
   buildMask() {
     const P = this.P, th = THEMES[S.set.theme] || THEMES[0], W = LW * P, H = LH * P;
     this.theme = th;
+    this.stale = true;
     const m = this.mask || (this.mask = document.createElement('canvas'));
     m.width = W; m.height = H;
     const g = m.getContext('2d');
@@ -1258,9 +1269,9 @@ const LCD = {
       const p = this.paper = document.createElement('canvas');
       p.width = W; p.height = H;
       const pg = p.getContext('2d');
-      const base = hexRgb(th.unlit), im = pg.createImageData(W, H);
+      const base = hexRgb(th.unlit), im = pg.createImageData(W, H), rnd = seeded(0xE1C);
       for (let i = 0; i < im.data.length; i += 4) {
-        const n = (Math.random() - 0.5) * 9;
+        const n = (rnd() - 0.5) * 9;
         im.data[i] = base[0] + n; im.data[i + 1] = base[1] + n; im.data[i + 2] = base[2] + n - 1; im.data[i + 3] = 255;
       }
       pg.putImageData(im, 0, 0);
@@ -1271,6 +1282,7 @@ const LCD = {
     this.palette();
   },
   palette() {
+    this.stale = true;
     const th = this.theme;
     const b = BRIGHT_STEPS[clamp(S.set.bright, 1, 5) - 1];
     const reflective = th.kind !== 'emissive';
@@ -1314,13 +1326,32 @@ const LCD = {
     }
     return true;
   },
+  /* like a real panel driver: the glass is only redrawn when a dot, the
+     look (theme, brightness, size) or the power state changed. A blinking
+     cursor costs two redraws a second, not sixty.                        */
   blit(t) {
+    const flick = t < this.flickerUntil;
+    const full = this.stale || flick || this.wasFlick || this.blitPower !== S.power;
+    const bands = full ? [[0, LH - 1]] : changedBands(FB, this.shown);
+    if (!bands.length) return;
+    this.stale = false; this.wasFlick = flick; this.blitPower = S.power;
     const d = this.img.data, pal = this.pal;
     for (let i = 0, j = 0; i < FB.length; i++, j += 4) {
       const c = pal[FB[i]];
       d[j] = c[0]; d[j + 1] = c[1]; d[j + 2] = c[2]; d[j + 3] = c[3];
     }
     this.lowG.putImageData(this.img, 0, 0);
+    // only the rows that changed are driven (a row of margin covers the glow)
+    for (const [y0, y1] of bands) {
+      if (full) { this.paint(t, flick); continue; }
+      const g = this.g, P = this.P, ya = Math.max(0, y0 - 1), yb = Math.min(LH, y1 + 2);
+      g.save(); g.beginPath(); g.rect(0, ya * P, this.cv.width, (yb - ya) * P); g.clip();
+      this.paint(t, flick);
+      g.restore();
+    }
+    this.shown.set(FB);
+  },
+  paint(t, flick) {
     const g = this.g, W = this.cv.width, H = this.cv.height, th = this.theme;
     g.globalAlpha = 1;
     g.globalCompositeOperation = 'source-over';
@@ -1348,10 +1379,26 @@ const LCD = {
       g.drawImage(this.light, 0, 0);
       g.globalCompositeOperation = 'source-over';
     }
-    this.shown.set(FB);
   },
   flicker(ms = 140) { this.flickerUntil = now() + ms; },
 };
+
+/* runs of framebuffer rows that differ from what the glass shows; runs a
+   few rows apart are merged so the redraw stays a handful of rectangles  */
+function changedBands(a, b) {
+  const out = [];
+  let start = -1, lastHit = -9;
+  for (let y = 0; y < LH; y++) {
+    let hit = false;
+    for (let i = y * LW, e = i + LW; i < e; i++) if (a[i] !== b[i]) { hit = true; break; }
+    if (!hit) continue;
+    if (start < 0) start = y;
+    else if (y - lastHit > 3) { out.push([start, lastHit]); start = y; }
+    lastHit = y;
+  }
+  if (start >= 0) out.push([start, lastHit]);
+  return out;
+}
 
 /* ---------- 10. overlays: designed panels that take over the screen ------ */
 const OV = { kind: null, until: 0, a: null, b: null, start: 0 };
@@ -1509,6 +1556,24 @@ function drawOverlay(t) {
       icon('heartL', 59, 23, OV.a ? INK.ACC : INK.DIM, 6);
       textC(OV.a ? 'FAVOURITE' : 'NOT A FAVOURITE', LW / 2, 53, F5, INK.LIT);
       marquee(OV.b || '', 24, 64, 112, F3, INK.DIM, age, 20);
+      break;
+    }
+    case 'selftest': {                              // lamp test with motion: every dot changes, nothing flashes
+      const p = clamp((t - OV.start) / SELFTEST_MS, 0, 1);   // progress follows the clock, not the frame count
+      rect(0, 0, LW, LH, INK.OFF);
+      text('SELF TEST', 0, 1, F3, INK.LIT);
+      textR('DISPLAY ' + Math.round(p * 100) + '%', 159, 1, F3, INK.DIM);
+      dots(0, 8, LW, INK.DIM, 2);
+      if (!REDUCED.matches) {
+        const ph = t / 1000 * 5;
+        for (let y = 11; y < 78; y++) for (let x = 0; x < LW; x++) {
+          const v = Math.sin((x + y * 1.7) / 7 - ph) + Math.sin(x / 23 + ph * 0.6) * 0.5;
+          if (v > 0.95) px(x, y, INK.LIT); else if (v > 0.25) px(x, y, INK.DIM);
+        }
+        vline(Math.round(p * (LW - 1)), 11, 67, INK.ACC);
+      } else for (let y = 12; y < 78; y += 2) for (let x = (y >> 1) & 1; x < LW; x += 2) px(x, y, INK.DIM);
+      frameRect(0, 82, LW, 9, INK.LIT);
+      rect(2, 84, Math.round((LW - 4) * p), 5, INK.LIT);
       break;
     }
     case 'air': {
@@ -1746,7 +1811,7 @@ const Enc = {
   dimple: $('#encDimple'), shadow: $('#encShadow'),
   STEP: Math.PI * 2 / 24,                  // 24 detents per turn
   angle: 0, omega: 0, idx: 0, rest: 0,
-  pid: null, lastA: 0, lastT: 0, sx: 0, sy: 0, moved: false, longFired: false, timer: 0,
+  pid: null, lastA: 0, lastT: 0, sx: 0, sy: 0, moved: false, longFired: false, timer: 0, lockedT: 0,
   press: new Spring(2400, 62),
   detentTimes: [],
   geom() {
@@ -1797,6 +1862,7 @@ const Enc = {
     if (S.hold || S.power !== 'on') {
       // locked: the knob only gives a little and won't click
       this.angle = this.rest + clamp(this.angle - this.rest + d * 0.18, -this.STEP * 0.45, this.STEP * 0.45);
+      if (S.hold && now() - this.lockedT > 700) { this.lockedT = now(); Snd.blip(420, 0.02, 0.05); Hap.tap(); }
       if (S.hold) App.locked();
       this.render();
       return;
@@ -2201,6 +2267,7 @@ const VIEWS = {
         Nav.open('confirm', { arg: { q: 'CLEAR ALL SONGS?', yes: () => Library.clear() } });
       } },
       { head: 'SYSTEM' },
+      { label: 'SELF TEST', sub: true, act: () => { Nav.open('selftest'); Diag.start(); } },
       { label: 'ABOUT', sub: true, act: () => { Nav.open('about'); Library.refreshStorage(); } },
     ],
   },
@@ -2219,6 +2286,12 @@ const VIEWS = {
       { label: 'OUTPUT', value: S.set.out === 'dsp' ? 'DSP' : 'DIRECT' },
       { label: 'AIRPLAY', value: S.wirelessAvail ? 'AVAILABLE' : '--' },
     ],
+  },
+  selftest: {
+    title: 'SELF TEST',
+    static: true,
+    push: () => Diag.start(),
+    items: () => Diag.items(),
   },
   confirm: {
     title: 'CONFIRM',
@@ -2348,6 +2421,7 @@ function drawList(t) {
     if (c.sel < c.top) c.top = c.sel;
     if (c.sel >= c.top + rows) c.top = c.sel - rows + 1;
   }
+  c.top = clamp(c.top, 0, Math.max(0, items.length - 1));   // a list that shrank or a stale selection never draws outside itself
   if (c.top > 0 && items[c.top - 1] && items[c.top - 1].head && c.sel === c.top) c.top--;   // keep a group's header visible
   const right = items.length > rows ? 155 : 159;
   for (let i = 0; i < rows; i++) {
@@ -4440,7 +4514,7 @@ const Access = {
       const def = VIEWS[c.id], items = Nav.items(c), it = items[c.sel];
       const title = spoken(typeof def.title === 'function' ? def.title(c) : def.title);
       if (!items.length) return `${title}. Empty.`;
-      if (def.static) return `${title}. ` + items.map(i => `${spoken(i.label)}: ${spoken(i.value)}`).join('. ') + '.';
+      if (def.static) return `${title}. ` + items.map(i => i.head ? spoken(i.head) : `${spoken(i.label)}: ${spoken(i.value)}`).join('. ') + '.';
       const sel = items.filter(i => !i.head);
       return `${title}. ${it ? spoken(it.label) + (it.value ? ', ' + spoken(it.value) : '') : ''}. ${sel.indexOf(it) + 1} of ${sel.length}.`;
     }
@@ -4473,6 +4547,7 @@ const Access = {
       case 'fav': s = a ? 'Added to favourites.' : 'Removed from favourites.'; break;
       case 'air': s = a ? 'Wireless on.' : 'Wireless off.'; break;
       case 'add': if (a.k === 0) s = `Adding ${a.n} ${a.n === 1 ? 'song' : 'songs'}.`; break;
+      case 'selftest': s = 'Self test. Measuring the display for two seconds.'; break;
       case 'shiftmap': s = 'Shift functions: 02 setup, 03 favourite, 04 sleep, 05 visualiser, 06 effects, 07 recent, 08 stop, 09 queue. Encoder: speed. Push: find.'; break;
     }
     if (s) { clearTimeout(this.timer); this.say(s); this.timer = setTimeout(() => this.announce(), 1600); }
@@ -4509,6 +4584,77 @@ const Access = {
   },
 };
 listeners.push(() => Access.labels());
+
+/* ---------- 29c. self test: the device checks the phone it runs on -------
+   The one number no lab can promise for every phone is the frame rate. A
+   lamp test with motion drives every dot each frame and measures the real
+   pacing here; then the page lists what iOS granted this web app.         */
+const SELFTEST_MS = 2400, SELFTEST_SLOW_MS = 20;
+const Diag = {
+  res: null, running: false,
+  start() {
+    if (this.running || S.power !== 'on') return;
+    this.running = true;
+    const gaps = []; let last = 0, t0 = 0, hidden = false;
+    const onVis = () => { if (document.hidden) hidden = true; };
+    document.addEventListener('visibilitychange', onVis);
+    overlay('selftest', null, null, SELFTEST_MS * 20);      // the measurement ends it, however slow the phone is
+    animate((dt, ts) => {
+      if (!t0) t0 = ts;
+      if (last) gaps.push(ts - last);
+      last = ts;
+      if (ts - t0 < SELFTEST_MS && OV.kind === 'selftest') return true;
+      document.removeEventListener('visibilitychange', onVis);
+      this.finish(gaps, !hidden && OV.kind === 'selftest');
+      return false;
+    });
+  },
+  async finish(gaps, measured) {
+    const ok = measured && gaps.length >= 5;                 // app hidden or test cancelled: no verdict
+    if (OV.kind === 'selftest') OV.kind = null;
+    const srt = gaps.slice().sort((a, b) => a - b), avg = gaps.reduce((a, b) => a + b, 0) / Math.max(1, gaps.length);
+    const r = { at: Date.now(), valid: ok };
+    if (ok) Object.assign(r, { fps: Math.round(1000 / avg), p95: srt[Math.floor(srt.length * 0.95)], slow: gaps.filter(g => g > SELFTEST_SLOW_MS).length, n: gaps.length });
+    const ctx = Snd.ctx, as = navigator.audioSession;
+    r.audio = ctx ? `${ctx.state.toUpperCase()} ${Math.round(ctx.sampleRate / 100) / 10}K` : 'NOT STARTED';
+    r.session = as ? String(as.type || 'auto').toUpperCase() : 'N/A';
+    r.lock = 'mediaSession' in navigator ? 'OK' : 'N/A';
+    r.haptics = Hap.supported ? (S.set.haptics ? 'OK' : 'OFF') : 'N/A';
+    r.offline = navigator.serviceWorker && navigator.serviceWorker.controller ? 'READY' : 'ONLINE ONLY';
+    r.storage = '--';
+    try { if (navigator.storage && navigator.storage.persisted) r.storage = (await navigator.storage.persisted()) ? 'PERSISTENT' : 'BEST EFFORT'; } catch (e) {}
+    r.pass = ok && r.fps >= 55 && r.slow <= Math.ceil(r.n * 0.03);
+    this.res = r; this.running = false;
+    Snd.blip(r.pass ? 2400 : 520, 0.03, 0.08); Hap.tap();
+    commit(); Access.announce();
+  },
+  items() {
+    const r = this.res;
+    if (this.running && !r) return [{ label: 'RUNNING', value: '...' }];
+    if (!r) return [{ label: 'PUSH 10', value: 'START' }];
+    const v = r.valid;
+    return [
+      { label: 'RESULT', value: !v ? 'INTERRUPTED' : r.pass ? 'PASS' : 'CHECK', accent: !v || !r.pass },
+      { head: 'DISPLAY' },
+      { label: 'FRAME RATE', value: v ? `${r.fps} FPS` : '--', accent: v && r.fps < 55 },
+      { label: 'SLOWEST 5%', value: v ? `${r.p95.toFixed(1)} MS` : '--' },
+      { label: 'LATE FRAMES', value: v ? `${r.slow} / ${r.n}` : '--' },
+      { head: 'AUDIO' },
+      { label: 'ENGINE', value: r.audio },
+      { label: 'SESSION', value: r.session },
+      { label: 'LOCK SCREEN', value: r.lock },
+      { head: 'SYSTEM' },
+      { label: 'HAPTICS', value: r.haptics },
+      { label: 'OFFLINE', value: r.offline },
+      { label: 'STORAGE', value: r.storage },
+      { label: 'TOUCH POINTS', value: String(navigator.maxTouchPoints || 0) },
+      { label: 'MOTION', value: REDUCED.matches ? 'REDUCED' : 'FULL' },
+      { label: 'DATABASE', value: 'V' + DB_VERSION },
+      { label: 'FIRMWARE', value: APP_VERSION },
+      { label: 'PUSH 10', value: 'RUN AGAIN' },
+    ];
+  },
+};
 
 /* the encoder's stand-in: VoiceOver swipes up/down (or arrow keys) turn it
    one detent; the value snaps back to the middle so it never runs out    */
@@ -4696,7 +4842,7 @@ setTimeout(() => { if (S.tracks.length) Disk.persist(); Disk.check(true); }, 400
 /* debug/test hooks (harmless in production) */
 window.__mp1 = { S, LCD, powerOn, commit, overlay, toast, render: () => { LCD.dirty = true; renderDisplay(now()); },
   step: (ms) => { for (let i = 0; i < ms / 16.67; i++) for (const a of anims) if (a(1 / 60, now()) === false) anims.delete(a); },
-  Enc, KEYS, Nav, App, Inputs, SwHold, SwSnd, Library, Player, Engine, DB, Covers, Tags, readMeta, Spec, Wave, Store, fault, OV, THEMES, Shift, Queue, Sleep, Search, Lists, VIEWS, Access, FX, Disk, Backup, freezeBoot: ms => { bootFreeze = ms; LCD.dirty = true; } };
+  Enc, KEYS, Nav, App, Inputs, SwHold, SwSnd, Library, Player, Engine, DB, Covers, Tags, readMeta, Spec, Wave, Store, fault, OV, THEMES, Shift, Queue, Sleep, Search, Lists, VIEWS, Access, Diag, FX, Disk, Backup, freezeBoot: ms => { bootFreeze = ms; LCD.dirty = true; } };
 window.__errs = [];
 addEventListener('error', e => window.__errs.push(String(e.message)));
 </script>
