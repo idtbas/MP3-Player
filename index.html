@@ -1130,7 +1130,7 @@ function toast(a, b, ms) { overlay('toast', a, b, ms); }
 function drawOverlay(t) {
   if (!OV.kind) return false;
   if (t > OV.until) { OV.kind = null; LCD.dirty = true; return false; }
-  const age = (t - OV.start) / 1000;
+  rect(0, 9, LW, LH - 9, 0);                              // overlays own the screen
   if (OV.kind === 'toast') {
     const l1 = norm(OV.a), l2 = OV.b ? norm(OV.b) : '';
     const w = Math.max(textW(l1, F5), textW(l2, F3)) + 14;
@@ -1149,6 +1149,41 @@ function drawOverlay(t) {
     for (let r = 0; r < ic.h; r++) for (let c = 0; c < ic.w; c++)
       if (ic.rows[r][c] === 'X') rect(x + 23 + c * 3, y + 6 + r * 3, 3, 3, 3);
     textC(OV.a ? 'HOLD' : 'HOLD OFF', LW / 2, y + 33, F5, 2);
+  } else if (OV.kind === 'vol') {
+    const x = 30, y = 22, w = 100, h = 48;
+    rect(x - 1, y - 1, w + 2, h + 2, 0);
+    frameRect(x, y, w, h, 2);
+    icon('spk', x + 5, y + 5, 2);
+    for (let i = 0; i < 3; i++) if (S.vol > i * 0.33) vline(x + 11 + i * 2, y + 7 - i, 3 + i * 2, 2);
+    text('VOL', x + 19, y + 6, F3, 2);
+    textR(Engine.volumeWorks() ? (S.set.out === 'dsp' ? 'DSP' : 'OUT') : 'IPHONE', x + w - 5, y + 6, F3, 1);
+    textC(String(Math.round(S.vol * 100)), LW / 2, y + 15, F5, 2, 2);
+    const segs = 22, n = Math.round(S.vol * segs);
+    for (let i = 0; i < segs; i++) {
+      const sx = x + 6 + i * 4;
+      if (i < n) rect(sx, y + 37, 3, 6, i === n - 1 ? 3 : 2); else rect(sx, y + 42, 3, 1, 1);
+    }
+  } else if (OV.kind === 'mode') {
+    const x = 22, y = 26, w = 116, h = 38;
+    rect(x - 1, y - 1, w + 2, h + 2, 0);
+    frameRect(x, y, w, h, 2);
+    textC('ENCODER MODE', LW / 2, y + 5, F3, 1);
+    ['VOL', 'SEEK', 'SCRL'].forEach((m, i) => {
+      const bx = x + 6 + i * 36, sel = i === S.encMode;
+      if (sel) rect(bx, y + 16, 32, 13, 2); else frameRect(bx, y + 16, 32, 13, 1);
+      textC(m, bx + 16, y + 19, F5, sel ? 0 : 1);
+    });
+  } else if (OV.kind === 'seek') {
+    const x = 18, y = 28, w = 124, h = 34;
+    rect(x - 1, y - 1, w + 2, h + 2, 0);
+    frameRect(x, y, w, h, 2);
+    icon(OV.a < 0 ? 'rw' : 'ff', x + 6, y + 6, 3);
+    const tt = fmtTime(S.t) + ' / ' + fmtTime(S.dur);
+    textR(tt, x + w - 6, y + 6, F5, 2);
+    const bw = w - 12, p = S.dur ? clamp(S.t / S.dur, 0, 1) : 0;
+    hline(x + 6, y + 23, bw, 1);
+    rect(x + 6, y + 22, Math.round(bw * p), 3, 2);
+    rect(x + 6 + Math.round(bw * p) - 1, y + 20, 3, 7, 3);
   }
   return true;
 }
@@ -1243,7 +1278,529 @@ function drawEmpty(t) {
   return true;
 }
 
-/* ---------- 12. frame loop ---------------------------------------------- */
+/* ---------- 12. physics -------------------------------------------------- */
+/* damped spring, integrated with fixed 240 Hz substeps for stability */
+class Spring {
+  constructor(k, c, x = 0) { this.k = k; this.c = c; this.x = x; this.v = 0; this.target = x; }
+  step(dt) {
+    const n = Math.max(1, Math.ceil(dt * 240)), h = dt / n;
+    for (let i = 0; i < n; i++) {
+      const a = -this.k * (this.x - this.target) - this.c * this.v;
+      this.v += a * h; this.x += this.v * h;
+    }
+    const moving = Math.abs(this.v) > 0.002 || Math.abs(this.x - this.target) > 0.0005;
+    if (!moving) { this.x = this.target; this.v = 0; }
+    return moving;
+  }
+}
+const deviceScale = () => parseFloat(document.documentElement.style.getPropertyValue('--s')) || 1;
+let lastHaptic = 0;
+function hapticTick() {                 // detent haptics, rate-limited
+  const t = now();
+  if (t - lastHaptic < 32) return;
+  lastHaptic = t; Hap.tap();
+}
+
+/* ---------- 13. rubber keys ---------------------------------------------- */
+const KEY_PRESS = { k: 2600, c: 72 };      // stiff, near-critical: bottoms out fast
+const KEY_RELEASE = { k: 820, c: 23 };     // softer: springs back with a ~25% overshoot
+class Key {
+  constructor(el) {
+    this.el = el;
+    this.name = el.dataset.key;
+    this.cap = $('.key__cap', el);
+    this.shadow = $('.key__shadow', el);
+    this.sp = new Spring(KEY_PRESS.k, KEY_PRESS.c);
+    this.pid = null; this.holdTimer = 0; this.longFired = false;
+    this.stepper = dt => { const m = this.sp.step(dt); this.render(); return m || this.pid != null; };
+    el.addEventListener('pointerdown', e => this.down(e));
+    el.addEventListener('pointerup', e => this.up(e, false));
+    el.addEventListener('pointercancel', e => this.up(e, true));
+    el.addEventListener('lostpointercapture', e => this.up(e, true));
+  }
+  down(e) {
+    if (this.pid != null) return;            // one finger per key, others are free
+    e.preventDefault();
+    this.pid = e.pointerId;
+    try { this.el.setPointerCapture(e.pointerId); } catch (_) { /* synthetic pointer */ }
+    Object.assign(this.sp, KEY_PRESS); this.sp.target = 1;
+    this.sp.step(1 / 120); this.render();    // respond in this very frame
+    anims.add(this.stepper);
+    Snd.keyDown(this.name === 'play');
+    Hap.tap();
+    this.longFired = false;
+    clearTimeout(this.holdTimer);
+    this.holdTimer = setTimeout(() => { this.longFired = true; App.keyLong(this.name); }, 460);
+    App.keyDown(this.name);
+  }
+  up(e, cancelled) {
+    if (this.pid == null || e.pointerId !== this.pid) return;
+    this.pid = null;
+    clearTimeout(this.holdTimer);
+    Object.assign(this.sp, KEY_RELEASE); this.sp.target = 0;
+    anims.add(this.stepper);
+    Snd.keyUp();
+    App.keyUp(this.name, cancelled, this.longFired);
+  }
+  render() {
+    const x = this.sp.x, k = clamp(x, -0.4, 1);
+    this.cap.style.transform = `translate3d(0,${(x * 3.4).toFixed(2)}px,0) scale(${(1 - x * 0.014).toFixed(4)})`;
+    this.shadow.style.opacity = (1 - 0.8 * k).toFixed(3);
+    this.shadow.style.transform = `translate3d(0,${(k * 1.8).toFixed(2)}px,0) scale(${(1 - 0.04 * k).toFixed(4)})`;
+  }
+}
+const KEYS = {};
+$$('.key').forEach(el => { const k = new Key(el); KEYS[k.name] = k; });
+
+/* ---------- 14. rotary encoder ------------------------------------------ */
+const Enc = {
+  hit: $('#encHit'), body: $('#encBody'), knurl: $('#encKnurl'), dot: $('#encDot'),
+  dimple: $('#encDimple'), shadow: $('#encShadow'),
+  STEP: Math.PI * 2 / 24,                  // 24 detents per turn
+  angle: 0, omega: 0, idx: 0, rest: 0,
+  pid: null, lastA: 0, lastT: 0, sx: 0, sy: 0, moved: false, longFired: false, timer: 0,
+  press: new Spring(2400, 62),
+  detentTimes: [],
+  geom() {
+    const r = this.hit.getBoundingClientRect();
+    return { cx: r.left + r.width / 2, cy: r.top + r.height / 2, k: r.width / 200 };
+  },
+  down(e) {
+    if (this.pid != null) return;
+    e.preventDefault();
+    this.pid = e.pointerId;
+    try { this.hit.setPointerCapture(e.pointerId); } catch (_) {}
+    const g = this.geom();
+    this.g = g;
+    this.lastA = Math.atan2(e.clientY - g.cy, e.clientX - g.cx);
+    this.lastT = e.timeStamp || now();
+    this.sx = e.clientX; this.sy = e.clientY;
+    this.moved = false; this.longFired = false; this.omega = 0;
+    this.rest = Math.round(this.angle / this.STEP) * this.STEP;
+    this.press.target = 0.45;                // finger resting on the knob
+    anims.add(this.stepper);
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      if (this.moved || this.pid == null) return;
+      this.longFired = true;
+      this.press.target = 1;
+      Snd.thunk(); Hap.tap();
+      App.encLong();
+    }, 520);
+  },
+  move(e) {
+    if (e.pointerId !== this.pid) return;
+    const g = this.g;
+    const dx = e.clientX - this.sx, dy = e.clientY - this.sy;
+    if (!this.moved && Math.hypot(dx, dy) / g.k > 6) {
+      this.moved = true;
+      clearTimeout(this.timer);
+      this.press.target = 0;
+    }
+    const a = Math.atan2(e.clientY - g.cy, e.clientX - g.cx);
+    let d = a - this.lastA;
+    if (d > Math.PI) d -= Math.PI * 2; else if (d < -Math.PI) d += Math.PI * 2;
+    this.lastA = a;
+    const r = Math.hypot(e.clientX - g.cx, e.clientY - g.cy) / g.k;
+    const t = e.timeStamp || now();
+    const dt = Math.max(1, t - this.lastT) / 1000;
+    this.lastT = t;
+    if (!this.moved || r < 18) return;        // near the axis the angle is noise
+    if (S.hold || S.power !== 'on') {
+      // locked: the knob only gives a little and won't click
+      this.angle = this.rest + clamp(this.angle - this.rest + d * 0.18, -this.STEP * 0.45, this.STEP * 0.45);
+      if (S.hold) App.locked();
+      this.render();
+      return;
+    }
+    this.omega = this.omega * 0.55 + (d / dt) * 0.45;
+    this.setAngle(this.angle + d);
+    this.render();
+  },
+  up(e, cancelled) {
+    if (this.pid == null || e.pointerId !== this.pid) return;
+    this.pid = null;
+    clearTimeout(this.timer);
+    this.press.target = 0;
+    if (!this.moved && !this.longFired && !cancelled) {
+      // a push: full click down, then release
+      this.press.x = Math.max(this.press.x, 0.9); this.render();
+      Snd.keyDown(false); Hap.tap();
+      setTimeout(() => Snd.keyUp(), 60);
+      App.encPress();
+    }
+    const t = e.timeStamp || now();
+    if (t - this.lastT > 90) this.omega = 0;       // finger stopped before lifting
+    this.omega = clamp(this.omega, -40, 40);
+    if (S.hold) this.omega = 0;
+    anims.add(this.stepper);
+  },
+  setAngle(a) {
+    this.angle = a;
+    const idx = Math.round(a / this.STEP);
+    if (idx === this.idx) return;
+    const dir = Math.sign(idx - this.idx);
+    const n = Math.min(Math.abs(idx - this.idx), 8);
+    this.idx = idx;
+    for (let i = 0; i < n; i++) this.detent(dir);
+  },
+  detent(dir) {
+    const t = now();
+    this.detentTimes.push(t);
+    while (this.detentTimes.length && t - this.detentTimes[0] > 400) this.detentTimes.shift();
+    Snd.tick(S.screen === 'list' ? 2 : S.encMode);
+    hapticTick();
+    App.encoder(dir, this.detentTimes.length / 0.4);   // detents per second
+  },
+  /* display angle: detents feel "magnetic" while dragging */
+  dispAngle() {
+    if (this.pid == null) return this.angle;
+    const f = this.angle / this.STEP, n = Math.round(f), fr = f - n;
+    return (n + fr - 0.13 * Math.sin(2 * Math.PI * fr)) * this.STEP;
+  },
+  stepper: null,
+  step(dt) {
+    let moving = this.press.step(dt);
+    if (this.pid == null) {
+      const near = Math.round(this.angle / this.STEP) * this.STEP;
+      if (Math.abs(this.omega) > 3) {
+        this.omega *= Math.exp(-2.6 * dt);                    // free spin with friction
+      } else {
+        this.omega += (-210 * (this.angle - near) - 21 * this.omega) * dt;   // fall into a detent
+      }
+      this.setAngle(this.angle + this.omega * dt);
+      if (Math.abs(this.omega) < 0.02 && Math.abs(this.angle - near) < 0.0015) {
+        this.angle = near; this.omega = 0;
+      } else moving = true;
+    } else moving = true;
+    this.render();
+    return moving;
+  },
+  render() {
+    const a = this.dispAngle(), p = this.press.x;
+    this.knurl.style.transform = `rotate(${a.toFixed(4)}rad)`;
+    this.dot.style.transform = `translate3d(${(Math.sin(a) * 78).toFixed(2)}px,${(-Math.cos(a) * 78).toFixed(2)}px,0)`;
+    const b = a + 2.25;
+    this.dimple.style.transform = `translate3d(${(Math.sin(b) * 54).toFixed(2)}px,${(-Math.cos(b) * 54).toFixed(2)}px,0)`;
+    this.body.style.transform = `translate3d(0,${(p * 1.6).toFixed(2)}px,0) scale(${(1 - p * 0.012).toFixed(4)})`;
+    this.shadow.style.opacity = (1 - 0.55 * p).toFixed(3);
+    this.shadow.style.transform = `translate3d(0,${(p * 1.2).toFixed(2)}px,0) scale(${(1 - 0.015 * p).toFixed(4)})`;
+  },
+};
+Enc.stepper = dt => Enc.step(dt);
+Enc.angle = Enc.rest = -Enc.STEP * 2; Enc.idx = -2;
+Enc.hit.addEventListener('pointerdown', e => Enc.down(e));
+Enc.hit.addEventListener('pointermove', e => Enc.move(e));
+Enc.hit.addEventListener('pointerup', e => Enc.up(e, false));
+Enc.hit.addEventListener('pointercancel', e => Enc.up(e, true));
+Enc.hit.addEventListener('lostpointercapture', e => Enc.up(e, true));
+Enc.render();
+
+/* ---------- 15. slide switches (HOLD, SND) ------------------------------- */
+class Switch {
+  constructor(el, get, set) {
+    this.el = el; this.get = get; this.set = set;
+    this.thumb = $('.sw__thumb', el); this.flag = $('.sw__flag', el);
+    this.sp = new Spring(1100, 24, get() ? 1 : 0);
+    this.pid = null; this.sx = 0; this.x0 = 0; this.dragged = false;
+    this.stepper = dt => { const m = this.sp.step(dt); this.render(); return m || this.pid != null; };
+    el.addEventListener('pointerdown', e => {
+      if (this.pid != null) return;
+      e.preventDefault();
+      this.pid = e.pointerId;
+      try { el.setPointerCapture(e.pointerId); } catch (_) {}
+      this.sx = e.clientX; this.x0 = this.sp.x; this.dragged = false;
+      Hap.tap();
+    });
+    el.addEventListener('pointermove', e => {
+      if (e.pointerId !== this.pid) return;
+      const dx = (e.clientX - this.sx) / deviceScale();
+      if (Math.abs(dx) > 3) this.dragged = true;
+      if (this.dragged) {                       // thumb follows the finger 1:1
+        this.sp.x = this.sp.target = clamp(this.x0 + dx / 17, 0, 1);
+        this.sp.v = 0;
+        this.render();
+      }
+    });
+    const end = (e, cancel) => {
+      if (this.pid == null || e.pointerId !== this.pid) return;
+      this.pid = null;
+      const was = this.get();
+      const next = this.dragged ? this.sp.x > 0.5 : (cancel ? was : !was);
+      this.sp.target = next ? 1 : 0;
+      anims.add(this.stepper);
+      if (next !== was) { Snd.thunk(); Hap.tap(); this.set(next); }
+    };
+    el.addEventListener('pointerup', e => end(e, false));
+    el.addEventListener('pointercancel', e => end(e, true));
+    this.render();
+  }
+  sync() { this.sp.target = this.get() ? 1 : 0; anims.add(this.stepper); }
+  render() {
+    const x = this.sp.x;
+    this.thumb.style.transform = `translate3d(${(x * 17).toFixed(2)}px,0,0)`;
+    if (this.flag) this.flag.style.opacity = clamp(x * 1.4 - 0.2, 0, 1).toFixed(3);
+    this.el.setAttribute('aria-checked', String(this.get()));
+  }
+}
+const SwHold = new Switch($('#swHold'), () => S.hold, v => {
+  S.hold = v;
+  if (S.power === 'on') overlay('hold', v, null, 900);
+  commit();
+});
+const SwSnd = new Switch($('#swSnd'), () => S.set.sound, v => {
+  S.set.sound = v;
+  if (v) setTimeout(() => Snd.blip(1760, 0.03, 0.1), 40);
+  if (S.power === 'on') toast(v ? 'SOUNDS ON' : 'SOUNDS OFF', null, 800);
+  commit();
+});
+
+/* ---------- 16. display menus -------------------------------------------- */
+const homeScreen = () => (S.tracks.length ? 'now' : 'empty');
+const onOff = b => (b ? 'ON' : 'OFF');
+const Nav = {
+  stack: [],
+  top() { return this.stack[this.stack.length - 1]; },
+  open(id, opts = {}) {
+    this.stack.push({ id, sel: opts.sel || 0, top: 0, arg: opts.arg, mode: null });
+    S.screen = 'list';
+    LCD.flicker(70);
+    commit();
+  },
+  back() {
+    this.stack.pop();
+    if (!this.stack.length) S.screen = homeScreen();
+    LCD.flicker(60);
+    commit();
+  },
+  home() { this.stack = []; S.screen = homeScreen(); LCD.flicker(70); commit(); },
+  items() { const c = this.top(); return c ? MENUS[c.id].items(c) : []; },
+  move(dir) {
+    const c = this.top(), items = this.items();
+    if (!c || !items.length) return;
+    if (c.mode === 'move') return Library.shift(c, dir);
+    const n = clamp(c.sel + dir, 0, items.length - 1);
+    if (n === c.sel) { Snd.blip(420, 0.02, 0.05); return; }   // end stop
+    c.sel = n;
+    commit();
+  },
+  select() {
+    const c = this.top();
+    if (!c) return;
+    if (c.mode === 'move') return Library.drop(c);
+    const it = this.items()[c.sel];
+    if (it && it.act) { it.act(c); commit(); }
+  },
+  long() {
+    const c = this.top();
+    if (c && MENUS[c.id].long) MENUS[c.id].long(c);
+  },
+};
+const MENUS = {
+  root: {
+    title: 'MENU',
+    items: () => [
+      { label: 'NOW PLAYING', act: () => Nav.home() },
+      { label: 'LIBRARY', value: two(S.tracks.length), act: () => {
+        if (S.tracks.length) Nav.open('lib', { sel: Math.max(0, S.cur) });
+        else toast('NO SONGS', 'PRESS 02 ADD');
+      } },
+      { label: 'ADD SONGS', act: () => Library.pick() },
+      { label: 'SETTINGS', act: () => Nav.open('settings') },
+      { label: 'INFO', act: () => { Nav.open('info'); Library.refreshStorage(); } },
+    ],
+  },
+  settings: {
+    title: 'SETTINGS',
+    items: () => [
+      { label: 'UI SOUNDS', value: onOff(S.set.sound), act: () => { S.set.sound = !S.set.sound; SwSnd.sync(); } },
+      { label: 'HAPTICS', value: Hap.supported ? onOff(S.set.haptics) : 'N/A', act: () => { S.set.haptics = !S.set.haptics; Hap.tap(); } },
+      { label: 'BRIGHTNESS', value: '#'.repeat(S.set.bright) + '.'.repeat(5 - S.set.bright), bar: S.set.bright,
+        act: () => { S.set.bright = S.set.bright % 5 + 1; LCD.palette(); } },
+      { label: 'DISPLAY', value: THEMES[S.set.theme].name, act: () => { S.set.theme = (S.set.theme + 1) % THEMES.length; LCD.buildMask(); LCD.flicker(160); } },
+      { label: 'AUDIO OUT', value: S.set.out === 'dsp' ? 'DSP' : 'DIRECT', act: () => Engine.setOut(S.set.out === 'dsp' ? 'direct' : 'dsp') },
+      { label: 'ENCODER', value: ['VOL', 'SEEK', 'SCRL'][S.encMode], act: () => { S.encMode = (S.encMode + 1) % 3; } },
+      { label: 'CLEAR LIBRARY', accent: true, act: () => {
+        if (!S.tracks.length) return toast('LIBRARY EMPTY');
+        Nav.open('confirm', { arg: { q: 'CLEAR ALL SONGS?', yes: () => Library.clear() } });
+      } },
+    ],
+  },
+  info: {
+    title: 'INFO',
+    static: true,
+    items: () => [
+      { label: 'MODEL', value: 'MP-1 / 001' },
+      { label: 'FIRMWARE', value: '1.0.0' },
+      { label: 'SONGS', value: String(S.tracks.length) },
+      { label: 'STORED', value: Library.usage.used },
+      { label: 'FREE', value: Library.usage.free },
+      { label: 'PERSISTENT', value: Library.usage.persist },
+      { label: 'AUDIO OUT', value: S.set.out === 'dsp' ? 'DSP' : 'DIRECT' },
+      { label: 'AIRPLAY', value: S.wirelessAvail ? 'AVAILABLE' : '--' },
+      { label: 'HAPTICS', value: Hap.supported ? 'YES' : 'NO' },
+    ],
+  },
+  confirm: {
+    title: 'CONFIRM',
+    items: c => [
+      { label: 'NO', act: () => Nav.back() },
+      { label: 'YES', accent: true, act: () => { const y = c.arg.yes; Nav.back(); y(); } },
+    ],
+  },
+};
+
+function drawList(t) {
+  const c = Nav.top();
+  if (!c) return false;
+  const def = MENUS[c.id];
+  const items = def.items(c);
+  let anim = false;
+  // header
+  text(def.title, 0, 1, F3, 2);
+  if (S.hold) { icon('lock', 112, 0, 3); }
+  if (!def.static && items.length) textR(`${two(c.sel + 1)}/${two(items.length)}`, 159, 1, F3, 1);
+  dots(0, 8, LW, 1, 2);
+  let y0 = 10, rows = 9;
+  if (c.id === 'confirm') {                         // question line above the choices
+    textC(c.arg.q, LW / 2, 20, F5, 2);
+    y0 = 40; rows = 2;
+  }
+  if (c.sel < c.top) c.top = c.sel;
+  if (c.sel >= c.top + rows) c.top = c.sel - rows + 1;
+  const right = items.length > rows ? 155 : 159;
+  for (let i = 0; i < rows; i++) {
+    const k = c.top + i;
+    if (k >= items.length) break;
+    const it = items[k], y = y0 + i * 9;
+    const sel = !def.static && k === c.sel;
+    const moving = sel && c.mode === 'move';
+    if (sel) rect(0, y - 1, right, 9, moving && (t % 500) < 250 ? 3 : 2);
+    const ink = sel ? 0 : 2;
+    if (!def.static) text(two(k + 1), 1, y + 1, F3, sel ? 0 : 1);
+    const lx = def.static ? 1 : 13;
+    let vw = 0;
+    if (it.bar) {                                   // brightness as five pixel blocks
+      for (let b = 0; b < 5; b++) {
+        const bx = right - 3 - (4 - b) * 5;
+        if (b < it.bar) rect(bx, y + 1, 4, 5, sel ? 0 : 3); else frameRect(bx, y + 1, 4, 5, sel ? 0 : 1);
+      }
+      vw = 26;
+    } else if (it.value != null) {
+      const vs = norm(it.value);
+      vw = textW(vs, F3) + 5;
+      textR(vs, right - 2, y + 2, F3, sel ? 0 : (it.accent ? 3 : def.static ? 2 : 1));
+    }
+    const lw = right - lx - vw - 3;
+    const label = it.label;
+    const ink2 = it.accent && !sel ? 3 : (it.dim && !sel ? 1 : ink);
+    if (sel && !def.static) anim = marquee(label, lx, y, lw, F5, ink2, t / 1000) || anim;
+    else {
+      const ox0 = cx0, ox1 = cx1;
+      clip(lx, 0, lx + lw, LH);
+      text(label, lx, def.static ? y + 2 : y, def.static ? F3 : F5, def.static ? 1 : ink2);
+      cx0 = ox0; cx1 = ox1;
+    }
+    if (it.sub && sel) anim = true;
+  }
+  if (items.length > rows) {                        // scrollbar
+    const th = 9 * rows - 1;
+    dots(158, y0 - 1, 1, 1, 2);
+    for (let yy = 0; yy < th; yy += 2) px(158, y0 - 1 + yy, 1);
+    const h = Math.max(4, Math.round(th * rows / items.length));
+    const yy = y0 - 1 + Math.round((th - h) * c.top / (items.length - rows));
+    rect(157, yy, 3, h, 2);
+  }
+  return anim || (c.mode === 'move');
+}
+
+/* ---------- 17. control actions ------------------------------------------ */
+let lastHoldFlash = 0;
+const App = {
+  locked() {
+    if (!S.hold) return false;
+    const t = now();
+    if (t - lastHoldFlash > 700) { overlay('hold', true, null, 800); lastHoldFlash = t; }
+    return true;
+  },
+  ready() { return S.power === 'on'; },
+  keyDown(name) {
+    if (!this.ready() || this.locked()) return;
+    switch (name) {
+      case 'menu': return Nav.stack.length ? Nav.back() : Nav.open('root');
+      case 'play': return Player.toggle();
+      case 'shuf': return Player.toggleShuffle();
+      case 'rpt': return Player.cycleRepeat();
+    }
+  },
+  keyLong(name) {
+    if (!this.ready() || S.hold) return;
+    if (name === 'prev' || name === 'next') Player.scanStart(name === 'next' ? 1 : -1);
+    if (name === 'menu' && Nav.stack.length) Nav.home();
+  },
+  keyUp(name, cancelled, long) {
+    if (!this.ready()) return;
+    if (name === 'prev' || name === 'next') {
+      if (long) return Player.scanStop();
+      if (cancelled || S.hold) return;
+      return name === 'next' ? Player.next(true) : Player.prev();
+    }
+    if (cancelled || S.hold) return;
+    // these two need the release (a real user activation) to open system UI
+    if (name === 'add') return Library.pick();
+    if (name === 'air') return Air.pick();
+  },
+  encoder(dir, rate) {
+    if (!this.ready() || this.locked()) return;
+    if (S.screen === 'list') return Nav.move(dir);
+    const mode = S.encMode;
+    if (mode === 0) return Player.nudgeVolume(dir);
+    if (mode === 1) return Player.nudgeSeek(dir, rate);
+    // SCRL: jump into the library at the current song and keep scrolling
+    if (!S.tracks.length) return toast('NO SONGS', 'PRESS 02 ADD');
+    Nav.open('lib', { sel: Math.max(0, S.cur) });
+    Nav.move(dir);
+  },
+  encPress() {
+    if (!this.ready() || this.locked()) return;
+    if (S.screen === 'list') return Nav.select();
+    if (S.screen === 'empty') return Library.pick();
+    Player.toggle();
+  },
+  encLong() {
+    if (!this.ready() || this.locked()) return;
+    if (S.screen === 'list') return Nav.long();
+    S.encMode = (S.encMode + 1) % 3;
+    overlay('mode', S.encMode, null, 1000);
+    commit();
+  },
+};
+
+/* ---------- 18. player / library stubs (replaced by the audio engine) ---- */
+const Player = {
+  toggle() { if (!S.tracks.length) { Snd.err(); toast('NO SONGS', 'PRESS 02 ADD'); } },
+  next() {}, prev() {}, scanStart() {}, scanStop() {},
+  toggleShuffle() { S.shuffle = !S.shuffle; toast(S.shuffle ? 'SHUFFLE ON' : 'SHUFFLE OFF', null, 800); commit(); },
+  cycleRepeat() { S.repeat = (S.repeat + 1) % 3; toast(['REPEAT OFF', 'REPEAT ALL', 'REPEAT ONE'][S.repeat], null, 800); commit(); },
+  nudgeVolume(dir) { S.vol = clamp(Math.round((S.vol + dir * 0.02) * 50) / 50, 0, 1); overlay('vol', null, null, 1100); commit(); },
+  nudgeSeek() { overlay('seek', null, null, 900); },
+};
+const Library = {
+  usage: { used: '--', free: '--', persist: '--' },
+  pick() { toast('ADD SONGS', 'COMING IN M4'); }, refreshStorage() {}, shift() {}, drop() {}, clear() {},
+};
+const Engine = { setOut(v) { S.set.out = v; }, volumeWorks: () => true };
+const Air = { pick() { toast('WIRELESS', 'NOT AVAILABLE'); } };
+
+/* key faces glow while their function is active */
+listeners.push(() => {
+  KEYS.play.el.classList.toggle('active', S.playing);
+  KEYS.shuf.el.classList.toggle('active', S.shuffle);
+  KEYS.rpt.el.classList.toggle('active', S.repeat > 0);
+  KEYS.air.el.classList.toggle('active', S.wireless);
+});
+
+/* ---------- 20. frame loop ---------------------------------------------- */
 const anims = new Set();                // per-frame physics steppers (keys, encoder…)
 let lastTs = 0;
 function frame(ts) {
@@ -1272,11 +1829,12 @@ function renderDisplay(t) {
   LCD.dirty = false;
 }
 function drawScreen(t) {
-  if (!S.tracks.length) return drawEmpty(t);
-  return drawEmpty(t);
+  if (S.screen === 'list' && Nav.top()) return drawList(t);
+  if (!S.tracks.length || typeof drawNow !== 'function') return drawEmpty(t);
+  return drawNow(t);
 }
 
-/* ---------- 13. power on + boot ----------------------------------------- */
+/* ---------- 21. power on + boot ----------------------------------------- */
 function powerOn() {
   if (S.power !== 'off') return;
   Snd.unlock();
@@ -1306,12 +1864,12 @@ $('#stage').addEventListener('pointerdown', e => {
   if (S.power === 'off') { e.stopPropagation(); e.preventDefault(); powerOn(); }
 }, true);
 
-/* ---------- 14. iOS page hygiene ---------------------------------------- */
+/* ---------- 22. iOS page hygiene ---------------------------------------- */
 ['gesturestart', 'gesturechange', 'gestureend', 'dblclick', 'contextmenu', 'selectstart'].forEach(ev =>
   document.addEventListener(ev, e => e.preventDefault(), { passive: false }));
 document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
 
-/* ---------- 15. start ---------------------------------------------------- */
+/* ---------- 23. start ---------------------------------------------------- */
 function relayout() {
   fitDevice();
   const s = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--s')) || 1;
@@ -1323,7 +1881,9 @@ LED.sync();
 requestAnimationFrame(frame);
 
 /* debug/test hooks (harmless in production) */
-window.__mp1 = { S, LCD, powerOn, commit, overlay, toast, render: () => { LCD.dirty = true; renderDisplay(now()); }, freezeBoot: ms => { bootFreeze = ms; LCD.dirty = true; } };
+window.__mp1 = { S, LCD, powerOn, commit, overlay, toast, render: () => { LCD.dirty = true; renderDisplay(now()); },
+  step: (ms) => { for (let i = 0; i < ms / 16.67; i++) for (const a of anims) if (a(1 / 60, now()) === false) anims.delete(a); },
+  Enc, KEYS, Nav, App, freezeBoot: ms => { bootFreeze = ms; LCD.dirty = true; } };
 window.__errs = [];
 addEventListener('error', e => window.__errs.push(String(e.message)));
 </script>
