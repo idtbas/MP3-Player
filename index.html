@@ -777,6 +777,7 @@ const S = {
   wireless: false, wirelessAvail: false,
   set: { sound: true, haptics: true, bright: 4, theme: 0, out: 'dsp', edition: 'orange', vis: 0, speed: 1, xfade: 0 },
   storageLow: false, sleepUntil: 0,
+  queue: [], recent: [], ctx: { kind: 'all', key: null },
   shift: false,
   resumeId: null, resumeT: 0,
 };
@@ -791,6 +792,7 @@ function loadPersisted() {
     S.repeat = [0, 1, 2].includes(p.repeat) ? p.repeat : 0;
     S.encMode = [0, 1, 2].includes(p.encMode) ? p.encMode : 0;
     S.resumeId = p.curId || null;
+    if (p.ctx && typeof p.ctx.kind === 'string') S.ctx = { kind: p.ctx.kind, key: p.ctx.key == null ? null : p.ctx.key };
     S.resumeT = +p.t || 0;
   } catch (e) { /* private mode or corrupt: run with defaults */ }
 }
@@ -801,7 +803,7 @@ function savePersisted(immediate) {
     try {
       const tr = S.tracks[S.cur];
       localStorage.setItem(PERSIST_KEY, JSON.stringify({
-        set: S.set, vol: S.vol, shuffle: S.shuffle, repeat: S.repeat, encMode: S.encMode,
+        set: S.set, vol: S.vol, shuffle: S.shuffle, repeat: S.repeat, encMode: S.encMode, ctx: S.ctx,
         curId: tr ? tr.id : S.resumeId, t: tr ? S.t : S.resumeT,
       }));
     } catch (e) { /* storage full / blocked: not fatal */ }
@@ -1016,6 +1018,11 @@ function circle(cx, cy, r, v) {      // midpoint circle outline
     y++;
     if (e < 0) e += 2 * y + 1; else { x--; e += 2 * (y - x) + 1; }
   }
+}
+/* crescent moon: a disc with an offset disc taken out */
+function crescent(cx, cy, r, v) {
+  for (let y = -r; y <= r; y++) for (let x = -r; x <= r; x++)
+    if (x * x + y * y <= r * r && (x - r * 0.55) ** 2 + (y + r * 0.3) ** 2 > (r * 0.85) ** 2) px(cx + x, cy + y, v);
 }
 /* a framed panel that owns the area under the status bar */
 function panel(x, y, w, h) { rect(0, 9, LW, LH - 9, INK.OFF); frameRect(x, y, w, h, INK.LIT); }
@@ -1443,6 +1450,49 @@ function drawOverlay(t) {
       textC('WRITING TO STORAGE' + '.'.repeat(Math.floor(t / 300) % 4), LW / 2, 68, F3, INK.DIM);
       break;
     }
+    case 'shiftmap': {
+      panel(4, 11, 152, 78);
+      icon('shift', 10, 16, INK.ACC); text('SHIFT +', 18, 16, F3, INK.ACC);
+      textR('SECOND FUNCTIONS', 150, 16, F3, INK.DIM);
+      const map = [['02', 'SETUP'], ['03', 'FAV'], ['04', 'SLEEP'], ['05', 'VIS'], ['06', 'FX'], ['07', 'RECENT'], ['08', 'STOP'], ['09', 'QUEUE'], ['10', 'SPEED']];
+      map.forEach(([n, f], i) => {
+        const x = 10 + (i % 3) * 48, y = 28 + Math.floor(i / 3) * 11;
+        text(n, x, y, F3, INK.DIM); text(f, x + 10, y, F3, INK.LIT);
+      });
+      dots(10, 63, 140, INK.DIM, 2);
+      text('PUSH 10 = FIND', 10, 67, F3, INK.LIT);
+      textR('TAP 01 = ONCE · 2× = LOCK', 150, 78, F3, INK.DIM);
+      break;
+    }
+    case 'sleep': {
+      panel(24, 18, 112, 56);
+      crescent(80, 33, 9, OV.a ? INK.ACC : INK.DIM);
+      const v = OV.a;
+      textC(v === 'night' ? 'GOOD NIGHT' : v === 'eot' ? 'END OF SONG' : v ? `SLEEP ${v} MIN` : 'SLEEP OFF', LW / 2, 50, F5, INK.LIT);
+      textC(v === 'night' ? 'PAUSED BY SLEEP TIMER' : v ? 'FADES OUT, THEN PAUSES' : 'SHIFT + 04 TO SET', LW / 2, 62, F3, INK.DIM);
+      break;
+    }
+    case 'speed': {
+      panel(18, 18, 124, 56);
+      text('SPEED', 26, 24, F3, INK.LIT);
+      textR('PITCH KEPT', 134, 24, F3, INK.DIM);
+      textC(OV.a.toFixed(2) + '×', LW / 2, 32, F5, OV.a === 1 ? INK.LIT : INK.ACC, 2);
+      const w = 108, n = SPEEDS.length;
+      SPEEDS.forEach((s, i) => {
+        const x = 26 + Math.round(i * (w - 1) / (n - 1));
+        vline(x, s === 1 ? 54 : 56, s === 1 ? 6 : 4, s === OV.a ? INK.ACC : INK.DIM);
+      });
+      hline(26, 62, w, INK.DIM);
+      text('0.5', 26, 65, F3, INK.DIM); textR('2.0', 134, 65, F3, INK.DIM);
+      break;
+    }
+    case 'fav': {
+      panel(16, 18, 128, 56);
+      icon('heartL', 59, 23, OV.a ? INK.ACC : INK.DIM, 6);
+      textC(OV.a ? 'FAVOURITE' : 'NOT A FAVOURITE', LW / 2, 53, F5, INK.LIT);
+      marquee(OV.b || '', 24, 64, 112, F3, INK.DIM, age, 20);
+      break;
+    }
     case 'air': {
       rect(0, 9, LW, LH - 9, INK.OFF);
       clip(0, 10, LW, 62);
@@ -1718,6 +1768,7 @@ const Enc = {
     this.omega = clamp(this.omega, -40, 40);
     if (S.hold) this.omega = 0;
     animate(this.stepper);
+    App.encRelease();
   },
   setAngle(a) {
     this.angle = a;
@@ -1839,93 +1890,249 @@ const SwSnd = new Switch($('#swSnd'), () => S.set.sound, v => {
   commit();
 });
 
-/* ---------- 16. display menus -------------------------------------------- */
+/* ---------- 16. views: menus, track lists, search ------------------------
+   Everything on the display is a stack of views. A view is a definition in
+   VIEWS (title, items, optional long-press) plus per-instance state (sel,
+   scroll, arg). Items may be headers ({ head }), which selection skips.   */
 const homeScreen = () => (S.tracks.length ? 'now' : 'empty');
 const onOff = b => (b ? 'ON' : 'OFF');
+const UNKNOWN_ARTIST = 'UNKNOWN ARTIST', UNKNOWN_ALBUM = 'UNKNOWN ALBUM';
+const artistOf = tr => (tr.artist || '').trim() || UNKNOWN_ARTIST;
+const albumOf = tr => (tr.album || '').trim() || UNKNOWN_ALBUM;
+const indexOfId = id => S.tracks.findIndex(t => t.id === id);
+const byId = id => S.tracks[indexOfId(id)];
+const ago = ms => { const m = Math.floor((Date.now() - ms) / 60000); return m < 60 ? Math.max(1, m) + 'M' : m < 1440 ? Math.floor(m / 60) + 'H' : Math.floor(m / 1440) + 'D'; };
+const LIST_ROWS = 9, ROW_H = 9, LIST_Y0 = 10;
+
+/* track sources: every list of songs on the device is one of these kinds */
+const Lists = {
+  ids(kind, key) {
+    switch (kind) {
+      case 'all': return S.tracks.map(t => t.id);
+      case 'artist': return S.tracks.filter(t => artistOf(t) === key).map(t => t.id);
+      case 'album': return S.tracks.filter(t => albumOf(t) === key)
+        .sort((a, b) => (parseInt(a.track, 10) || 999) - (parseInt(b.track, 10) || 999) || a.title.localeCompare(b.title)).map(t => t.id);
+      case 'fav': return S.tracks.filter(t => t.fav).map(t => t.id);
+      case 'recent': return S.recent.map(r => r.id).filter(id => indexOfId(id) >= 0);
+      case 'queue': return S.queue.filter(id => indexOfId(id) >= 0);
+      case 'search': return Search.results(key);
+    }
+    return [];
+  },
+  groups(field) {                                  // artists or albums with counts
+    const m = new Map();
+    for (const t of S.tracks) {
+      const k = field === 'artist' ? artistOf(t) : albumOf(t);
+      const g = m.get(k) || { name: k, n: 0, by: artistOf(t) };
+      g.n++; m.set(k, g);
+    }
+    return [...m.values()].sort((a, b) => norm(a.name).localeCompare(norm(b.name)));
+  },
+};
+const EMPTY_TEXT = {
+  fav: ['NO FAVOURITES YET', 'SHIFT + 03 ON A SONG'],
+  recent: ['NOTHING PLAYED YET', 'PLAY A SONG FOR 10 S'],
+  queue: ['QUEUE IS EMPTY', 'HOLD 10 ON A SONG'],
+  search: ['NO MATCHES', 'TRY FEWER LETTERS'],
+  all: ['NO SONGS', 'PRESS 03 ADD'],
+};
+
 const Nav = {
   stack: [],
   top() { return this.stack[this.stack.length - 1]; },
+  def(c) { return VIEWS[(c || this.top()).id]; },
+  items(c = this.top()) { return c ? this.def(c).items(c) : []; },
   open(id, opts = {}) {
-    this.stack.push({ id, sel: opts.sel || 0, top: 0, arg: opts.arg, mode: null, selT: now() });
+    const c = { id, sel: opts.sel || 0, top: 0, arg: opts.arg, mode: null, selT: now() };
+    this.stack.push(c);
+    this.fixSel(c, 1);
     S.screen = 'list';
     commit();
+    Access.announce();
   },
   back() {
     const c = this.top();
     if (c && c.mode === 'move') return Library.drop(c);
+    if (c && c.id === 'search' && c.arg.focus === 'list') { c.arg.focus = 'q'; commit(); return; }
+    if (c && c.id === 'fx' && c.mode === 'edit') { c.mode = null; commit(); return; }
     this.stack.pop();
     if (!this.stack.length) S.screen = homeScreen();
     commit();
+    Access.announce();
   },
-  home() { this.stack = []; S.screen = homeScreen(); commit(); },
-  items() { const c = this.top(); return c ? MENUS[c.id].items(c) : []; },
+  home() { this.stack = []; S.screen = homeScreen(); commit(); Access.announce(); },
+  fixSel(c, dir) {                                 // never rest on a header row
+    const items = this.items(c);
+    c.sel = clamp(c.sel, 0, Math.max(0, items.length - 1));
+    let guard = items.length;
+    while (items[c.sel] && items[c.sel].head && guard--) c.sel = clamp(c.sel + dir, 0, items.length - 1);
+    if (items[c.sel] && items[c.sel].head) c.sel = Math.max(0, items.findIndex(i => !i.head));
+  },
   move(dir) {
-    const c = this.top(), items = this.items();
-    if (!c || !items.length) return;
+    const c = this.top();
+    if (!c) return;
+    const d = this.def(c);
+    if (d.turn) return d.turn(c, dir);
     if (c.mode === 'move') return Library.shift(c, dir);
-    const n = clamp(c.sel + dir, 0, items.length - 1);
-    if (n === c.sel) { Snd.blip(420, 0.02, 0.05); return; }   // end stop
+    const items = this.items(c);
+    if (!items.length) return;
+    if (d.static) {                                 // read-only pages scroll instead of selecting
+      const top = clamp(c.top + dir, 0, Math.max(0, items.length - LIST_ROWS));
+      if (top === c.top) return Snd.blip(420, 0.02, 0.05);
+      c.top = top; commit(); return;
+    }
+    let n = c.sel;
+    do { n += dir; } while (items[n] && items[n].head);
+    if (n < 0 || n >= items.length) { Snd.blip(420, 0.02, 0.05); return; }   // end stop
     c.sel = n;
     c.selT = now();
     commit();
+    Access.announce();
   },
   select() {
     const c = this.top();
     if (!c) return;
+    const d = this.def(c);
+    if (d.push) return d.push(c);
     if (c.mode === 'move') return Library.drop(c);
-    const it = this.items()[c.sel];
+    const it = this.items(c)[c.sel];
     if (it && it.act) { it.act(c); commit(); }
   },
   long() {
     const c = this.top();
-    if (c && MENUS[c.id].long) MENUS[c.id].long(c);
+    if (!c) return;
+    const d = this.def(c);
+    if (d.long) d.long(c);
   },
 };
-const MENUS = {
+
+/* the song menu, opened by holding the encoder on any song */
+function songMenu(id, from) { Snd.thunk(); Nav.open('song', { arg: { id, from } }); }
+
+const VIEWS = {
   root: {
     title: 'MENU',
     items: () => [
       { label: 'NOW PLAYING', act: () => Nav.home() },
-      { label: 'LIBRARY', value: two(S.tracks.length), act: () => {
-        if (S.tracks.length) Nav.open('lib', { sel: Math.max(0, S.cur) });
-        else toast('NO SONGS', 'PRESS 03 ADD');
-      } },
+      { label: 'LIBRARY', sub: true, value: String(S.tracks.length), act: () => Nav.open('library') },
+      { label: 'SEARCH', sub: true, act: () => Search.open() },
+      { label: 'QUEUE', sub: true, value: String(Lists.ids('queue').length), act: () => Nav.open('list', { arg: { kind: 'queue', title: 'QUEUE' } }) },
       { label: 'ADD SONGS', act: () => Library.pick() },
-      { label: 'SETTINGS', act: () => Nav.open('settings') },
-      { label: 'INFO', act: () => { Nav.open('info'); Library.refreshStorage(); } },
+      { label: 'SETTINGS', sub: true, act: () => Nav.open('settings') },
+      { label: 'ABOUT', sub: true, act: () => { Nav.open('about'); Library.refreshStorage(); } },
     ],
+  },
+  library: {
+    title: 'LIBRARY',
+    items: () => [
+      { label: 'TRACKS', sub: true, value: String(S.tracks.length), act: () => Nav.open('list', { arg: { kind: 'all', title: 'TRACKS' }, sel: Math.max(0, S.cur) }) },
+      { label: 'ARTISTS', sub: true, value: String(Lists.groups('artist').length), act: () => Nav.open('groups', { arg: { field: 'artist' } }) },
+      { label: 'ALBUMS', sub: true, value: String(Lists.groups('album').length), act: () => Nav.open('groups', { arg: { field: 'album' } }) },
+      { label: 'FAVOURITES', sub: true, value: String(Lists.ids('fav').length), act: () => Nav.open('list', { arg: { kind: 'fav', title: 'FAVOURITES' } }) },
+      { label: 'RECENT', sub: true, value: String(Lists.ids('recent').length), act: () => Nav.open('list', { arg: { kind: 'recent', title: 'RECENT' } }) },
+    ],
+  },
+  groups: {
+    title: c => (c.arg.field === 'artist' ? 'ARTISTS' : 'ALBUMS'),
+    items: c => Lists.groups(c.arg.field).map(g => ({
+      label: g.name, value: String(g.n), sub: true,
+      act: () => Nav.open('list', { arg: { kind: c.arg.field, key: g.name, title: g.name } }),
+    })),
+  },
+  /* any list of songs: push plays it (and makes the list the play context) */
+  list: {
+    title: c => c.arg.title,
+    hint: 'HOLD=MORE',
+    empty: c => EMPTY_TEXT[c.arg.kind] || EMPTY_TEXT.all,
+    items: c => {
+      const kind = c.arg.kind, cur = Player.cur();
+      return Lists.ids(kind, c.arg.key).map(id => {
+        const tr = byId(id);
+        const value = kind === 'recent' ? ago((S.recent.find(r => r.id === id) || {}).t || Date.now()) : (tr.dur ? fmtTime(tr.dur).replace(/^0/, '') : '');
+        return {
+          id, label: tr.title, value, now: !!cur && cur.id === id, fav: tr.fav,
+          act: () => {
+            if (kind === 'queue') Player.playFromQueue(id);
+            else Player.playFrom(kind, c.arg.key, id);
+            Nav.home();
+          },
+        };
+      });
+    },
+    long: c => { const it = Nav.items(c)[c.sel]; if (it) songMenu(it.id, c); },
+  },
+  song: {
+    title: 'SONG',
+    items: c => {
+      const tr = byId(c.arg.id);
+      if (!tr) return [{ label: 'SONG REMOVED', dim: true }];
+      const fromKind = c.arg.from && c.arg.from.arg && c.arg.from.arg.kind;
+      const queued = S.queue.includes(tr.id);
+      const rows = [
+        { label: 'PLAY', act: () => { Player.playFrom(fromKind && fromKind !== 'queue' ? fromKind : 'all', c.arg.from && c.arg.from.arg.key, tr.id); Nav.home(); } },
+        { label: 'PLAY NEXT', act: () => { Queue.add(tr.id, true); Nav.back(); } },
+        { label: queued ? 'REMOVE FROM QUEUE' : 'ADD TO QUEUE', act: () => { queued ? Queue.remove(tr.id) : Queue.add(tr.id, false); Nav.back(); } },
+        { label: tr.fav ? 'UNFAVOURITE' : 'FAVOURITE', fav: !tr.fav, act: () => Library.toggleFav(tr.id) },
+        { label: 'GO TO ARTIST', sub: true, act: () => Nav.open('list', { arg: { kind: 'artist', key: artistOf(tr), title: artistOf(tr) } }) },
+        { label: 'GO TO ALBUM', sub: true, act: () => Nav.open('list', { arg: { kind: 'album', key: albumOf(tr), title: albumOf(tr) } }) },
+      ];
+      if (fromKind === 'all') rows.push({ label: 'MOVE', act: () => { const i = indexOfId(tr.id); Nav.back(); const l = Nav.top(); if (l) { l.sel = i; l.mode = 'move'; toast('MOVE', 'TURN · PUSH TO DROP', 1200); } } });
+      rows.push(
+        { label: 'REMOVE', accent: true, act: () => Nav.open('confirm', { arg: { q: 'REMOVE SONG?', yes: () => Library.remove(indexOfId(tr.id)) } }) },
+        { head: 'INFO' },
+        { label: 'ARTIST', value: artistOf(tr), dim: true },
+        { label: 'ALBUM', value: albumOf(tr), dim: true },
+        { label: 'FORMAT', value: [tr.kbps ? tr.kbps + 'K' : '', tr.fmt || ''].filter(Boolean).join(' '), dim: true },
+        { label: 'PLAYS', value: String(tr.plays || 0), dim: true },
+        { label: 'SIZE', value: fmtBytes(tr.size || 0), dim: true },
+      );
+      return rows;
+    },
   },
   settings: {
     title: 'SETTINGS',
     items: () => [
+      { head: 'SOUND' },
       { label: 'UI SOUNDS', value: onOff(S.set.sound), act: () => { S.set.sound = !S.set.sound; SwSnd.sync(); } },
       { label: 'HAPTICS', value: Hap.supported ? onOff(S.set.haptics) : 'N/A', act: () => { S.set.haptics = !S.set.haptics; Hap.tap(); } },
-      { label: 'BRIGHTNESS', value: '#'.repeat(S.set.bright) + '.'.repeat(5 - S.set.bright), bar: S.set.bright,
-        act: () => { S.set.bright = S.set.bright % 5 + 1; LCD.palette(); } },
-      { label: 'DISPLAY', value: THEMES[S.set.theme].name, act: () => { S.set.theme = (S.set.theme + 1) % THEMES.length; LCD.buildMask(); } },
+      { head: 'DISPLAY' },
+      { label: 'TYPE', value: THEMES[S.set.theme].name, act: () => { S.set.theme = (S.set.theme + 1) % THEMES.length; LCD.buildMask(); } },
+      { label: 'BRIGHTNESS', bar: S.set.bright, act: () => { S.set.bright = S.set.bright % 5 + 1; LCD.palette(); } },
       { label: 'VISUALISER', value: ['SPECTRUM', 'SCOPE'][S.set.vis || 0], act: () => { S.set.vis = (S.set.vis + 1) % 2; } },
-      { label: 'AUDIO OUT', value: S.set.out === 'dsp' ? 'DSP' : 'DIRECT', act: () => Engine.setOut(S.set.out === 'dsp' ? 'direct' : 'dsp') },
-      { label: 'ENCODER', value: ['VOL', 'SEEK', 'SCRL'][S.encMode], act: () => { S.encMode = (S.encMode + 1) % 3; } },
+      { head: 'DEVICE' },
       { label: 'EDITION', value: S.set.edition.toUpperCase(), act: () => { S.set.edition = EDITIONS[(EDITIONS.indexOf(S.set.edition) + 1) % EDITIONS.length]; } },
+      { label: 'ENCODER', value: ['VOL', 'SEEK', 'SCRL'][S.encMode], act: () => { S.encMode = (S.encMode + 1) % 3; } },
+      { head: 'AUDIO' },
+      { label: 'OUTPUT', value: S.set.out === 'dsp' ? 'DSP' : 'DIRECT', act: () => Engine.setOut(S.set.out === 'dsp' ? 'direct' : 'dsp') },
+      { label: 'EQ + TAPE', sub: true, act: () => FX.open() },
+      { label: 'CROSSFADE', value: S.set.xfade ? S.set.xfade + ' S' : 'GAPLESS', act: () => { S.set.xfade = XFADE_STEPS[(XFADE_STEPS.indexOf(S.set.xfade) + 1) % XFADE_STEPS.length]; } },
+      { label: 'SPEED', value: S.set.speed.toFixed(2) + '×', act: () => Player.setSpeed(SPEEDS[(SPEEDS.indexOf(S.set.speed) + 1) % SPEEDS.length]) },
+      { label: 'SLEEP', value: Sleep.label(), act: () => Sleep.cycle() },
+      { head: 'LIBRARY' },
+      { label: 'BACKUP', sub: true, act: () => Backup.save() },
+      { label: 'RESTORE', sub: true, act: () => Backup.pick() },
       { label: 'CLEAR LIBRARY', accent: true, act: () => {
         if (!S.tracks.length) return toast('LIBRARY EMPTY');
         Nav.open('confirm', { arg: { q: 'CLEAR ALL SONGS?', yes: () => Library.clear() } });
       } },
+      { head: 'SYSTEM' },
+      { label: 'ABOUT', sub: true, act: () => { Nav.open('about'); Library.refreshStorage(); } },
     ],
   },
-  info: {
-    title: 'INFO',
+  about: {
+    title: 'ABOUT',
     static: true,
     items: () => [
       { label: 'MODEL', value: 'MP-1 / 001' },
-      { label: 'FIRMWARE', value: '1.0.0' },
+      { label: 'EDITION', value: S.set.edition.toUpperCase() },
+      { label: 'FIRMWARE', value: APP_VERSION },
       { label: 'SONGS', value: String(S.tracks.length) },
+      { label: 'ARTISTS · ALBUMS', value: `${Lists.groups('artist').length} · ${Lists.groups('album').length}` },
       { label: 'STORED', value: Library.usage.used },
       { label: 'FREE', value: Library.usage.free },
       { label: 'PERSISTENT', value: Library.usage.persist },
-      { label: 'AUDIO OUT', value: S.set.out === 'dsp' ? 'DSP' : 'DIRECT' },
+      { label: 'OUTPUT', value: S.set.out === 'dsp' ? 'DSP' : 'DIRECT' },
       { label: 'AIRPLAY', value: S.wirelessAvail ? 'AVAILABLE' : '--' },
-      { label: 'HAPTICS', value: Hap.supported ? 'YES' : 'NO' },
     ],
   },
   confirm: {
@@ -1935,79 +2142,296 @@ const MENUS = {
       { label: 'YES', accent: true, act: () => { const y = c.arg.yes; Nav.back(); y(); } },
     ],
   },
+  search: {
+    title: 'SEARCH',
+    items: c => Lists.ids('search', c.arg.q).map(id => ({ id, label: byId(id).title, value: artistOf(byId(id)) })),
+    turn: (c, dir) => Search.turn(c, dir),
+    push: c => Search.push(c),
+    long: c => Search.long(c),
+  },
 };
+
+/* encoder-driven search: turn picks a letter, push types it,
+   07 deletes, 09 jumps into the results */
+const SEARCH_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -';
+const Search = {
+  open() { Nav.open('search', { arg: { q: '', ci: 0, focus: 'q' } }); },
+  results(q) {
+    q = norm(q).trim();
+    if (!q) return [];
+    return S.tracks.filter(t => norm(`${t.title} ${artistOf(t)} ${albumOf(t)}`).includes(q)).map(t => t.id);
+  },
+  turn(c, dir) {
+    if (c.arg.focus === 'q') { c.arg.ci = (c.arg.ci + dir + SEARCH_CHARS.length) % SEARCH_CHARS.length; commit(); return; }
+    const n = Nav.items(c).length;
+    const s = clamp(c.sel + dir, 0, Math.max(0, n - 1));
+    if (s === c.sel) { Snd.blip(420, 0.02, 0.05); return; }
+    c.sel = s; c.selT = now(); commit(); Access.announce();
+  },
+  push(c) {
+    if (c.arg.focus === 'q') {
+      if (c.arg.q.length >= 14) return Snd.err();
+      c.arg.q += SEARCH_CHARS[c.arg.ci];
+      c.sel = 0; c.top = 0;
+      commit(); Access.announce();
+      return;
+    }
+    const it = Nav.items(c)[c.sel];
+    if (it) { Player.playFrom('search', c.arg.q, it.id); Nav.home(); }
+  },
+  long(c) {
+    if (c.arg.focus === 'list') { const it = Nav.items(c)[c.sel]; if (it) songMenu(it.id, c); return; }
+    this.del(c);
+  },
+  del(c) { if (!c.arg.q) return Snd.blip(420, 0.02, 0.05); c.arg.q = c.arg.q.slice(0, -1); commit(); Access.announce(); },
+  toList(c) {
+    if (!Nav.items(c).length) return Snd.err();
+    c.arg.focus = 'list'; c.sel = 0; c.top = 0; c.selT = now(); commit(); Access.announce();
+  },
+};
+
+function drawSearch(c, t) {
+  const items = Nav.items(c);
+  text('SEARCH', 0, 1, F3, INK.LIT);
+  icon('find', 26, 0, INK.DIM);
+  textR(c.arg.q ? `${items.length} FOUND` : 'TYPE', 159, 1, F3, INK.DIM);
+  dots(0, 8, LW, INK.DIM, 2);
+  // query line: typed text, then the candidate letter in a blinking box
+  const qf = c.arg.focus === 'q';
+  frameRect(0, 11, LW, 13, qf ? INK.LIT : INK.DIM);
+  const x = text(c.arg.q, 4, 14, F5, INK.LIT) + (c.arg.q ? 5 : 4);
+  if (qf) {
+    const ch = SEARCH_CHARS[c.arg.ci] === ' ' ? '_' : SEARCH_CHARS[c.arg.ci];
+    const on = REDUCED.matches || (t % 900) < 600;
+    rect(x - 1, 13, 7, 9, on ? INK.ACC : INK.OFF);
+    text(ch, x, 14, F5, on ? INK.OFF : INK.ACC);
+    textR('07 DEL · 09 LIST', 157, 15, F3, INK.DIM);
+  }
+  // results
+  const y0 = 28, rows = 7;
+  if (!c.arg.q) { textC('TURN 10 · PUSH TO TYPE', LW / 2, 50, F3, INK.DIM); return !REDUCED.matches; }
+  if (!items.length) { textC('NO MATCHES', LW / 2, 46, F5, INK.LIT); textC('07 DELETES A LETTER', LW / 2, 58, F3, INK.DIM); return !REDUCED.matches; }
+  if (c.sel < c.top) c.top = c.sel;
+  if (c.sel >= c.top + rows) c.top = c.sel - rows + 1;
+  for (let i = 0; i < rows && c.top + i < items.length; i++) {
+    const k = c.top + i, it = items[k], y = y0 + i * 9;
+    const sel = !qf && k === c.sel;
+    if (sel) rect(0, y - 1, LW, 9, INK.LIT);
+    const ox0 = cx0, ox1 = cx1;
+    clip(2, 0, 96, LH);
+    text(it.label, 2, y, F5, sel ? INK.OFF : INK.LIT);
+    clip(100, 0, 158, LH);
+    text(it.value, 100, y + 1, F3, sel ? INK.OFF : INK.DIM);
+    cx0 = ox0; cx1 = ox1;
+  }
+  return !REDUCED.matches;
+}
 
 function drawList(t) {
   const c = Nav.top();
   if (!c) return false;
-  const def = MENUS[c.id];
+  const def = VIEWS[c.id];
+  if (c.id === 'search') return drawSearch(c, t);
+  if (c.id === 'fx') return FX.draw(c, t);
   const items = def.items(c);
+  const title = typeof def.title === 'function' ? def.title(c) : def.title;
   let anim = false;
   // header
-  text(def.title, 0, 1, F3, 2);
-  if (S.hold) icon('lock', 112, 0, 3);
-  else if (def.hint) text(c.mode === 'move' ? 'MOVING' : def.hint, 44, 1, F3, c.mode === 'move' ? 3 : 1);
-  if (!def.static && items.length) textR(`${two(c.sel + 1)}/${two(items.length)}`, 159, 1, F3, 1);
-  dots(0, 8, LW, 1, 2);
-  let y0 = 10, rows = 9;
+  const ox0 = cx0, ox1 = cx1;
+  clip(0, 0, 100, LH);
+  text(title, 0, 1, F3, INK.LIT);
+  cx0 = ox0; cx1 = ox1;
+  if (S.hold) icon('lock', 112, 0, INK.ACC);
+  else if (S.shift) { rect(104, 0, 26, 7, INK.ACC); text('SHIFT', 106, 1, F3, INK.OFF); }
+  else if (def.hint && items.length) text(c.mode === 'move' ? 'MOVING' : def.hint, 60, 1, F3, c.mode === 'move' ? INK.ACC : INK.DIM);
+  const selectable = items.filter(i => !i.head);
+  if (!def.static && selectable.length) {
+    const pos = selectable.indexOf(items[c.sel]) + 1;
+    textR(`${two(pos)}/${two(selectable.length)}`, 159, 1, F3, INK.DIM);
+  }
+  dots(0, 8, LW, INK.DIM, 2);
+  if (!items.length) {                              // designed empty state
+    const [a, b] = def.empty ? def.empty(c) : ['NOTHING HERE', ''];
+    textC(a, LW / 2, 40, F5, INK.LIT);
+    if (b) textC(b, LW / 2, 52, F3, INK.DIM);
+    return false;
+  }
+  let y0 = LIST_Y0, rows = LIST_ROWS;
   if (c.id === 'confirm') {                         // question line above the choices
-    textC(c.arg.q, LW / 2, 20, F5, 2);
+    textC(c.arg.q, LW / 2, 22, F5, INK.LIT);
     y0 = 40; rows = 2;
   }
-  if (c.sel < c.top) c.top = c.sel;
-  if (c.sel >= c.top + rows) c.top = c.sel - rows + 1;
+  if (!def.static) {
+    if (c.sel < c.top) c.top = c.sel;
+    if (c.sel >= c.top + rows) c.top = c.sel - rows + 1;
+  }
+  if (c.top > 0 && items[c.top - 1] && items[c.top - 1].head && c.sel === c.top) c.top--;   // keep a group's header visible
   const right = items.length > rows ? 155 : 159;
   for (let i = 0; i < rows; i++) {
     const k = c.top + i;
     if (k >= items.length) break;
-    const it = items[k], y = y0 + i * 9;
+    const it = items[k], y = y0 + i * ROW_H;
+    if (it.head) {                                  // group header: small caps + rule
+      text(it.head, 1, y + 2, F3, INK.ACC);
+      dots(textW(it.head, F3) + 4, y + 4, right - textW(it.head, F3) - 4, INK.DIM, 2);
+      continue;
+    }
     const sel = !def.static && k === c.sel;
     const moving = sel && c.mode === 'move';
-    if (sel) rect(0, y - 1, right, 9, moving && (t % 500) < 250 ? 3 : 2);
-    const ink = sel ? 0 : 2;
+    if (sel) rect(0, y - 1, right, ROW_H, moving && (t % 500) < 250 ? INK.ACC : INK.LIT);
+    const ink = sel ? INK.OFF : INK.LIT;
     if (!def.static) {
-      if (it.now) icon('arrR', 3, y + 1, sel ? 0 : 3);
-      else text(two(k + 1), 1, y + 1, F3, sel ? 0 : 1);
+      if (it.now) icon('arrR', 3, y + 1, sel ? INK.OFF : INK.ACC);
+      else text(two((selectable.indexOf(it) + 1) % 100), 1, y + 1, F3, sel ? INK.OFF : INK.DIM);
     }
     const lx = def.static ? 1 : 13;
     let vw = 0;
-    if (it.bar) {                                   // brightness as five pixel blocks
+    if (it.bar) {                                   // a value drawn as five pixel blocks
       for (let b = 0; b < 5; b++) {
         const bx = right - 3 - (4 - b) * 5;
-        if (b < it.bar) rect(bx, y + 1, 4, 5, sel ? 0 : 3); else frameRect(bx, y + 1, 4, 5, sel ? 0 : 1);
+        if (b < it.bar) rect(bx, y + 1, 4, 5, sel ? INK.OFF : INK.ACC); else frameRect(bx, y + 1, 4, 5, sel ? INK.OFF : INK.DIM);
       }
       vw = 26;
-    } else if (it.value != null) {
+    } else if (it.value != null && it.value !== '') {
       const vs = norm(it.value);
-      vw = textW(vs, F3) + 5;
-      textR(vs, right - 2, y + 2, F3, sel ? 0 : (it.accent ? 3 : def.static ? 2 : 1));
+      const maxW = def.static ? 90 : 60;
+      vw = Math.min(textW(vs, F3), maxW) + 5;
+      const ox0b = cx0, ox1b = cx1;
+      clip(right - 2 - Math.min(textW(vs, F3), maxW), 0, right - 1, LH);
+      textR(vs, right - 2, y + 2, F3, sel ? INK.OFF : (it.accent ? INK.ACC : def.static ? INK.LIT : INK.DIM));
+      cx0 = ox0b; cx1 = ox1b;
     }
+    if (it.sub) { icon('arrR', right - 5 - vw, y + 1, sel ? INK.OFF : INK.DIM); vw += 6; }
+    if (it.fav) { icon('heart', right - 7 - vw, y + 1, sel ? INK.OFF : INK.ACC); vw += 7; }
     const lw = right - lx - vw - 3;
-    const label = it.label;
-    const ink2 = it.accent && !sel ? 3 : (it.dim && !sel ? 1 : ink);
-    if (sel && !def.static) anim = marquee(label, lx, y, lw, F5, ink2, (t - (c.selT || 0)) / 1000) || anim;
+    const ink2 = it.accent && !sel ? INK.ACC : (it.dim && !sel ? INK.DIM : ink);
+    if (sel && !def.static) anim = marquee(it.label, lx, y, lw, F5, ink2, (t - (c.selT || 0)) / 1000) || anim;
     else {
-      const ox0 = cx0, ox1 = cx1;
+      const oa = cx0, ob = cx1;
       clip(lx, 0, lx + lw, LH);
-      text(label, lx, def.static ? y + 2 : y, def.static ? F3 : F5, def.static ? 1 : ink2);
-      cx0 = ox0; cx1 = ox1;
+      text(it.label, lx, def.static ? y + 2 : y, def.static ? F3 : F5, def.static ? INK.DIM : ink2);
+      cx0 = oa; cx1 = ob;
     }
-    if (it.sub && sel) anim = true;
   }
   if (items.length > rows) {                        // scrollbar
-    const th = 9 * rows - 1;
-    dots(158, y0 - 1, 1, 1, 2);
-    for (let yy = 0; yy < th; yy += 2) px(158, y0 - 1 + yy, 1);
+    const th = ROW_H * rows - 1;
+    for (let yy = 0; yy < th; yy += 2) px(158, y0 - 1 + yy, INK.DIM);
     const h = Math.max(4, Math.round(th * rows / items.length));
-    const yy = y0 - 1 + Math.round((th - h) * c.top / (items.length - rows));
-    rect(157, yy, 3, h, 2);
+    const yy = y0 - 1 + Math.round((th - h) * c.top / Math.max(1, items.length - rows));
+    rect(157, yy, 3, h, INK.LIT);
   }
   return anim || (c.mode === 'move');
 }
 
-/* ---------- 17. control actions ------------------------------------------ */
+/* ---------- 17. control layer: SHIFT, queue, sleep, actions ------------- */
+
+/* SHIFT, OP-1 style: hold for a momentary shift, tap for one shot,
+   double-tap to lock. Holding it shows the map of second functions.      */
+const SHIFT_TAP_MS = 300, SHIFT_DOUBLE_MS = 450, SHIFT_MAP_MS = 520;
+const Shift = {
+  held: false, latched: false, locked: false, used: false, downT: 0, lastTapT: 0, mapTimer: 0,
+  active() { return this.held || this.latched || this.locked; },
+  sync() {
+    S.shift = this.active();
+    const k = KEYS.shift.el;
+    k.classList.toggle('active', this.held || this.locked);
+    k.classList.toggle('blink', this.latched && !this.held && !this.locked);
+    k.setAttribute('aria-pressed', String(S.shift));
+    LCD.dirty = true; wake();
+  },
+  down() {
+    this.held = true; this.used = false; this.downT = now();
+    clearTimeout(this.mapTimer);
+    this.mapTimer = setTimeout(() => { if (this.held && !this.used && S.power === 'on') overlay('shiftmap', null, null, 60000); }, SHIFT_MAP_MS);
+    this.sync();
+  },
+  up(cancelled) {
+    this.held = false;
+    clearTimeout(this.mapTimer);
+    if (OV.kind === 'shiftmap') OV.kind = null;
+    const tap = !cancelled && !this.used && now() - this.downT < SHIFT_TAP_MS;
+    if (tap) {
+      if (this.locked) { this.locked = false; this.latched = false; }
+      else if (this.latched && now() - this.lastTapT < SHIFT_DOUBLE_MS) { this.latched = false; this.locked = true; toast('SHIFT LOCK', 'TAP 01 TO RELEASE', 900); }
+      else this.latched = !this.latched;
+      this.lastTapT = now();
+    }
+    this.sync();
+  },
+  /* a shifted action happened: one-shot latches clear (encoder drags clear on release) */
+  use(consume = true) {
+    this.used = true;
+    if (OV.kind === 'shiftmap') OV.kind = null;
+    if (consume && this.latched && !this.held) this.latched = false;
+    this.sync();
+  },
+  release() { if (this.used && this.latched && !this.held) { this.latched = false; this.sync(); } },
+  reset() { this.held = this.latched = this.locked = false; clearTimeout(this.mapTimer); this.sync(); },
+};
+
+/* up-next queue: plays before the current list continues */
+const Queue = {
+  save() { Store.kvSet('queue', S.queue.slice()); },
+  add(id, front) {
+    S.queue = S.queue.filter(q => q !== id);
+    if (front) S.queue.unshift(id); else S.queue.push(id);
+    this.save();
+    toast(front ? 'PLAYS NEXT' : 'QUEUED', `${S.queue.length} IN QUEUE`, 900);
+    Player.prefetch();
+    commit();
+  },
+  remove(id) { S.queue = S.queue.filter(q => q !== id); this.save(); toast('REMOVED FROM QUEUE', null, 900); commit(); },
+  take() {
+    while (S.queue.length) {
+      const id = S.queue.shift();
+      if (indexOfId(id) >= 0) { this.save(); return id; }
+    }
+    this.save();
+    return null;
+  },
+};
+
+/* sleep timer: fades out over the last seconds, then pauses */
+const SLEEP_STEPS = [0, 15, 30, 45, 60, 90, 'eot'];
+const SLEEP_FADE_MS = 12000;
+const Sleep = {
+  i: 0, timer: 0, fading: false,
+  label() { const v = SLEEP_STEPS[this.i]; return v === 'eot' ? 'END OF SONG' : v ? v + ' MIN' : 'OFF'; },
+  cycle() { this.i = (this.i + 1) % SLEEP_STEPS.length; this.set(SLEEP_STEPS[this.i]); },
+  set(v) {
+    this.stopFade();
+    clearInterval(this.timer);
+    S.sleepUntil = v === 'eot' ? 'eot' : v ? Date.now() + v * 60000 : 0;
+    if (typeof S.sleepUntil === 'number' && S.sleepUntil) this.timer = setInterval(() => this.check(), 1000);
+    overlay('sleep', v, null, 1300);
+    commit();
+  },
+  check() {                                        // also called from timeupdate (background-safe)
+    if (typeof S.sleepUntil !== 'number' || !S.sleepUntil) return;
+    const left = S.sleepUntil - Date.now();
+    if (left <= SLEEP_FADE_MS && !this.fading && S.playing) { this.fading = true; Engine.fadeOut(Math.max(800, left)); }
+    if (left <= 0) this.fire();
+    else if (Math.floor(left / 60000) !== this.lastMin) { this.lastMin = Math.floor(left / 60000); LCD.dirty = true; wake(); }
+  },
+  endOfSong() { if (S.sleepUntil !== 'eot') return false; this.fire(); return true; },
+  fire() {
+    clearInterval(this.timer);
+    S.sleepUntil = 0; this.i = 0;
+    Player.pause();
+    this.stopFade();
+    overlay('sleep', 'night', null, 2600);
+    commit();
+  },
+  stopFade() { if (this.fading) { this.fading = false; Engine.applyVolume(); } },
+};
+
+/* playback speed: pitch is preserved by the media element */
+const SPEEDS = [0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2];
+const XFADE_STEPS = [0, 2, 4, 8];
+
 let lastHoldFlash = 0;
 const App = {
+  shifted: new Set(),                              // keys whose press was a shift function
   locked() {
     if (!S.hold) return false;
     const t = now();
@@ -2015,9 +2439,29 @@ const App = {
     return true;
   },
   ready() { return S.power === 'on'; },
+  inSearch() { const c = Nav.top(); return S.screen === 'list' && c && c.id === 'search' ? c : null; },
+  /* second functions, printed under each key */
+  shiftAction(name) {
+    switch (name) {
+      case 'menu': return Nav.stack.length && Nav.top().id === 'settings' ? Nav.back() : Nav.open('settings');
+      case 'add': {
+        const c = Nav.top(), it = S.screen === 'list' && c ? Nav.items(c)[c.sel] : null;
+        const id = it && it.id ? it.id : (Player.cur() || {}).id;
+        return id ? Library.toggleFav(id) : Snd.err();
+      }
+      case 'air': return Sleep.cycle();
+      case 'shuf': S.set.vis = (S.set.vis + 1) % 2; toast('VISUALISER', ['SPECTRUM', 'SCOPE'][S.set.vis], 900); return commit();
+      case 'rpt': return FX.open();
+      case 'prev': return Nav.open('list', { arg: { kind: 'recent', title: 'RECENT' } });
+      case 'play': return Player.stop();
+      case 'next': return Nav.open('list', { arg: { kind: 'queue', title: 'QUEUE' } });
+    }
+  },
   keyDown(name) {
-    if (name === 'shift') { S.shift = true; commit(); return; }
+    if (name === 'shift') return Shift.down();
+    if (OV.kind === 'error' || OV.kind === 'storage') { OV.kind = null; LCD.dirty = true; }
     if (!this.ready() || this.locked()) return;
+    if (Shift.active()) { this.shifted.add(name); Shift.use(); return this.shiftAction(name); }
     switch (name) {
       case 'menu': return Nav.stack.length ? Nav.back() : Nav.open('root');
       case 'play': return Player.toggle();
@@ -2026,13 +2470,19 @@ const App = {
     }
   },
   keyLong(name) {
-    if (!this.ready() || S.hold) return;
-    if (name === 'prev' || name === 'next') Player.scanStart(name === 'next' ? 1 : -1);
+    if (!this.ready() || S.hold || this.shifted.has(name)) return;
+    if ((name === 'prev' || name === 'next') && !this.inSearch()) Player.scanStart(name === 'next' ? 1 : -1);
     if (name === 'menu' && Nav.stack.length) Nav.home();
   },
   keyUp(name, cancelled, long) {
-    if (name === 'shift') { S.shift = false; commit(); return; }
+    if (name === 'shift') return Shift.up(cancelled);
+    if (this.shifted.delete(name)) return;
     if (!this.ready()) return;
+    const sc = this.inSearch();
+    if (sc && (name === 'prev' || name === 'next')) {
+      if (cancelled || S.hold) return;
+      return name === 'prev' ? Search.del(sc) : Search.toList(sc);
+    }
     if (name === 'prev' || name === 'next') {
       if (long) return Player.scanStop();
       if (cancelled || S.hold) return;
@@ -2045,18 +2495,21 @@ const App = {
   },
   encoder(dir, rate) {
     if (!this.ready() || this.locked()) return;
+    if (Shift.active()) { Shift.use(false); return Player.nudgeSpeed(dir); }
     if (S.screen === 'list') return Nav.move(dir);
     const mode = S.encMode;
     if (mode === 0) return Player.nudgeVolume(dir);
     if (mode === 1) return Player.nudgeSeek(dir, rate);
-    // SCRL: jump into the library at the current song and keep scrolling
+    // SCRL: jump into the track list at the current song and keep scrolling
     if (!S.tracks.length) return toast('NO SONGS', 'PRESS 03 ADD');
-    Nav.open('lib', { sel: Math.max(0, S.cur) });
+    Nav.open('list', { arg: { kind: 'all', title: 'TRACKS' }, sel: Math.max(0, S.cur) });
     Nav.move(dir);
   },
+  encRelease() { Shift.release(); },
   encPress() {
-    if (!this.ready() || this.locked()) return;
     if (OV.kind === 'error' || OV.kind === 'storage') { OV.kind = null; LCD.dirty = true; return; }
+    if (!this.ready() || this.locked()) return;
+    if (Shift.active()) { Shift.use(); return Search.open(); }
     if (S.screen === 'list') return Nav.select();
     if (S.screen === 'empty') return Library.pick();
     Player.toggle();
@@ -2401,6 +2854,7 @@ const Covers = {
             lock-screen playback and AirPlay. Volume = iPhone side keys.
    In DIRECT mode the dsp element shadows the music silently (gain 0) so the
    visualiser still analyses the real track; it pauses while hidden.       */
+const BLESS_TIMEOUT_MS = 1500;
 const Engine = {
   dsp: null, dir: null, out: null,
   an: null, gain: null, graph: false, blessed: false, blessing: 0, volOK: null,
@@ -2448,20 +2902,30 @@ const Engine = {
     for (const a of [this.dsp, this.dir]) {
       if (!a.paused) continue;                    // already playing for real
       try {
+        if (!a.currentSrc) {
+          // nothing loaded: its play() promise would never settle. A bare
+          // play/pause inside the gesture still lifts the restriction.
+          const p = a.play();
+          a.pause();
+          if (p && p.catch) p.catch(() => {});
+          continue;
+        }
         const t0 = a.currentTime;
         a.muted = true;
         this.blessing++;
-        const settle = () => setTimeout(() => { this.blessing--; }, 0);   // after the queued pause event
+        let settled = false;
+        const settle = () => { if (settled) return; settled = true; setTimeout(() => { this.blessing = Math.max(0, this.blessing - 1); }, 0); };
         const done = () => {
           if (!(a === this.out && Player.want)) {
             a.pause();
-            try { if (a.currentSrc) a.currentTime = t0; } catch (e) {}
+            try { a.currentTime = t0; } catch (e) {}
           }
           a.muted = false;
           settle();
         };
         const p = a.play();
         if (p && p.then) p.then(done, () => { a.muted = false; settle(); }); else done();
+        setTimeout(() => { if (!settled) { a.muted = false; settle(); } }, BLESS_TIMEOUT_MS);
       } catch (e) { a.muted = false; }
     }
   },
@@ -2487,6 +2951,7 @@ const Engine = {
     const shadow = this.out === this.dir ? this.dsp : this.dir;
     this.out.src = url;
     this.out.load();
+    this.setRate(S.set.speed);
     if (this.out === this.dir) { shadow.src = url; shadow.load(); }
     else if (shadow.getAttribute('src')) { shadow.removeAttribute('src'); shadow.load(); }
   },
@@ -2508,6 +2973,18 @@ const Engine = {
     if (this.out === this.dir) try { this.dsp.currentTime = t; } catch (e) {}
   },
   get time() { return this.out.currentTime || 0; },
+  setRate(r) {
+    for (const a of [this.dsp, this.dir]) {
+      try { a.defaultPlaybackRate = r; a.playbackRate = r; a.preservesPitch = true; a.webkitPreservesPitch = true; } catch (e) {}
+    }
+  },
+  fadeOut(ms) {
+    if (!this.gain || this.out !== this.dsp) return;           // direct output: no level control on iOS
+    const g = this.gain.gain, c = this.gain.context;
+    g.cancelScheduledValues(c.currentTime);
+    g.setValueAtTime(g.value, c.currentTime);
+    g.linearRampToValueAtTime(0, c.currentTime + ms / 1000);
+  },
   /* keep the silent analysis shadow aligned with the audible element */
   sync(force) {
     if (this.out !== this.dir || !this.graph) return;
@@ -2551,11 +3028,13 @@ const Engine = {
 
 /* ---------- 22. player: queue, transport, shuffle/repeat ---------------- */
 const Player = {
-  urls: new Map(), order: [], token: 0, pendingSeek: 0, quietUntil: 0, wantPause: false, want: false,
+  urls: new Map(), order: [], pos: 0, counted: false, token: 0, pendingSeek: 0, quietUntil: 0, wantPause: false, want: false,
   scanTimer: 0, scanT0: 0, lastSave: 0, retry: new Set(), bad: new Set(), errSkips: 0,
   cur() { return S.tracks[S.cur]; },
   rebuildOrder() {
-    const n = S.tracks.length, idx = Array.from({ length: n }, (_, i) => i);
+    let ids = Lists.ids(S.ctx.kind, S.ctx.key);
+    if (!ids.length || S.ctx.kind === 'queue') { S.ctx = { kind: 'all', key: null }; ids = Lists.ids('all'); }
+    const idx = ids.map(indexOfId).filter(i => i >= 0), n = idx.length;
     if (S.shuffle && n > 1) {
       for (let i = n - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [idx[i], idx[j]] = [idx[j], idx[i]]; }
       const k = idx.indexOf(S.cur);
@@ -2565,8 +3044,9 @@ const Player = {
   },
   neighbour(dir) {
     if (!S.tracks.length) return -1;
-    if (this.order.length !== S.tracks.length) this.rebuildOrder();
-    const k = this.order.indexOf(S.cur);
+    if (!this.order.length || this.order.some(i => i >= S.tracks.length)) this.rebuildOrder();
+    let k = this.order.indexOf(S.cur);
+    if (k < 0) k = this.pos;                        // a queued song: continue the list where we left it
     const j = k + dir;
     if (j < 0 || j >= this.order.length) return null;   // ran off the end
     return this.order[j];
@@ -2590,7 +3070,8 @@ const Player = {
     for (const [id, u] of this.urls) if (!keep.has(id)) { URL.revokeObjectURL(u); this.urls.delete(id); }
   },
   prefetch() {
-    let n = this.neighbour(1);
+    const qid = S.queue.find(id => indexOfId(id) >= 0);
+    let n = qid ? indexOfId(qid) : this.neighbour(1);
     if (n == null && S.repeat === 1) n = this.order[0];
     const tr = n != null && n >= 0 ? S.tracks[n] : null;
     if (tr && !this.urls.has(tr.id)) this.urlFor(tr).catch(() => {});
@@ -2601,6 +3082,9 @@ const Player = {
     if (!tr) return;
     const tok = ++this.token;
     S.cur = i; S.t = t; S.dur = tr.dur || 0;
+    const k = this.order.indexOf(i);
+    if (k >= 0) this.pos = k;
+    this.counted = false;
     S.trackT0 = now();
     commit();
     Covers.load(tr.id).then(() => { LCD.dirty = true; MS.update(); });
@@ -2646,12 +3130,48 @@ const Player = {
     commit();
   },
   toggle() { S.playing ? this.pause() : this.play(); },
+  /* start a song inside a list; that list becomes what NEXT/PREV walk */
+  playFrom(kind, key, id) {
+    S.ctx = { kind: kind || 'all', key: key == null ? null : key };
+    const i = indexOfId(id);
+    if (i < 0) return;
+    S.cur = i;
+    this.rebuildOrder();
+    savePersisted();
+    this.playIndex(i);
+  },
+  playFromQueue(id) {
+    const at = S.queue.indexOf(id);
+    if (at >= 0) S.queue.splice(0, at + 1);
+    Queue.save();
+    this.playIndex(indexOfId(id));
+  },
+  stop() {
+    if (S.cur < 0) return Snd.err();
+    this.pause();
+    this.seek(0);
+    toast('STOP', null, 700);
+  },
+  setSpeed(v) {
+    S.set.speed = v;
+    Engine.setRate(v);
+    overlay('speed', v, null, 1100);
+    commit();
+  },
+  nudgeSpeed(dir) {
+    const i = SPEEDS.reduce((b, s, k) => (Math.abs(s - S.set.speed) < Math.abs(SPEEDS[b] - S.set.speed) ? k : b), 0);
+    const j = clamp(i + dir, 0, SPEEDS.length - 1);
+    if (j === i) return Snd.blip(420, 0.02, 0.05);
+    this.setSpeed(SPEEDS[j]);
+  },
   playIndex(i) {
     if (i === S.cur && Engine.out.getAttribute('src')) { this.seek(0); this.play(); return; }
     this.load(i, { play: true });
   },
   next(user, forcePlay) {
     if (!S.tracks.length) return Snd.err();
+    const q = Queue.take();
+    if (q) return this.load(indexOfId(q), { play: user ? S.playing || !!forcePlay : true });
     let n = this.neighbour(1);
     if (n == null) {
       if (S.shuffle && (user || S.repeat === 1)) { this.rebuildOrder(); n = this.order[0] === S.cur && this.order.length > 1 ? this.order[1] : this.order[0]; }
@@ -2747,6 +3267,8 @@ const Player = {
       }
       case 'timeupdate': {
         S.t = a.currentTime;
+        if (!this.counted && a.currentTime >= RECENT_AFTER_S) { this.counted = true; Library.markPlayed(this.cur()); }
+        Sleep.check();
         const t = now();
         if (t - this.lastSave > 4000) { this.lastSave = t; savePersisted(); }
         MS.position();
@@ -2773,6 +3295,7 @@ const Player = {
         break;
       case 'ended': {
         const tr = this.cur();
+        if (Sleep.endOfSong()) break;
         if (S.repeat === 2 && tr) { this.seek(0); this.play(); break; }
         this.next(false);
         break;
@@ -2791,6 +3314,7 @@ const Player = {
 };
 
 /* ---------- 23. library management --------------------------------------- */
+const RECENT_AFTER_S = 10, RECENT_MAX = 50;
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const fmtBytes = n => n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : n >= 1e6 ? (n / 1e6).toFixed(1) + ' MB' : Math.round(n / 1e3) + ' KB';
 const Library = {
@@ -2799,6 +3323,9 @@ const Library = {
   async load() {
     try { S.tracks = await DB.all(); }
     catch (e) { S.tracks = []; this.dbError = true; }
+    const live = new Set(S.tracks.map(t => t.id));
+    S.queue = ((await Store.kvGet('queue')) || []).filter(id => live.has(id));
+    S.recent = ((await Store.kvGet('recent')) || []).filter(r => r && live.has(r.id));
     Player.rebuildOrder();
     if (S.tracks.length && S.cur < 0) {
       let i = S.tracks.findIndex(t => t.id === S.resumeId);
@@ -2848,6 +3375,22 @@ const Library = {
     }
     commit();
   },
+  toggleFav(id) {
+    const tr = byId(id);
+    if (!tr) return;
+    tr.fav = !tr.fav;
+    DB.putMeta(tr).catch(() => fault('NOT SAVED', 'FAVOURITE COULD NOT BE STORED', 'TRY AGAIN'));
+    overlay('fav', tr.fav, tr.title, 1100);
+    commit();
+  },
+  markPlayed(tr) {
+    if (!tr) return;
+    tr.plays = (tr.plays || 0) + 1;
+    tr.last = Date.now();
+    DB.putMeta(tr).catch(() => {});
+    S.recent = [{ id: tr.id, t: tr.last }, ...S.recent.filter(r => r.id !== tr.id)].slice(0, RECENT_MAX);
+    Store.kvSet('recent', S.recent);
+  },
   async refreshStorage() {
     try {
       if (navigator.storage && navigator.storage.estimate) {
@@ -2876,7 +3419,9 @@ const Library = {
       else { Engine.out.removeAttribute('src'); Engine.out.load(); MS.update(); }
     }
     Player.rebuildOrder();
-    while (Nav.stack.length && Nav.top().id !== 'lib') Nav.stack.pop();
+    S.queue = S.queue.filter(q => q !== tr.id); Queue.save();
+    S.recent = S.recent.filter(r => r.id !== tr.id); Store.kvSet('recent', S.recent);
+    while (Nav.stack.length && Nav.top().id !== 'list') Nav.stack.pop();
     if (!S.tracks.length) Nav.home();
     else if (Nav.top()) Nav.top().sel = clamp(i, 0, S.tracks.length - 1);
     toast('REMOVED', null, 900);
@@ -2906,6 +3451,7 @@ const Library = {
     for (const u of Player.urls.values()) URL.revokeObjectURL(u);
     Player.urls.clear();
     S.tracks = []; S.cur = -1; S.t = 0; S.dur = 0;
+    S.queue = []; S.recent = []; Queue.save(); Store.kvSet('recent', []);
     Engine.out.removeAttribute('src'); Engine.out.load();
     MS.update();
     Nav.home();
@@ -2914,31 +3460,9 @@ const Library = {
 };
 $('#filePick').addEventListener('change', e => Library.import(e.target.files));
 
-/* library + per-song menus */
-MENUS.lib = {
-  title: 'LIBRARY',
-  hint: 'HOLD=EDIT',
-  items: () => S.tracks.map((tr, i) => ({
-    label: tr.title, value: tr.dur ? fmtTime(tr.dur).replace(/^0/, '') : '', now: i === S.cur,
-    act: () => { Player.playIndex(i); Nav.home(); },
-  })),
-  long: c => { Snd.thunk(); Nav.open('song', { arg: c.sel }); },
-};
-MENUS.song = {
-  title: 'SONG',
-  items: c => {
-    const tr = S.tracks[c.arg] || {};
-    return [
-      { label: 'PLAY', act: () => { Player.playIndex(c.arg); Nav.home(); } },
-      { label: 'MOVE', act: () => { Nav.back(); const l = Nav.top(); if (l) { l.sel = c.arg; l.mode = 'move'; toast('MOVE', 'TURN · PUSH TO DROP', 1200); } } },
-      { label: 'REMOVE', accent: true, act: () => Nav.open('confirm', { arg: { q: 'REMOVE SONG?', yes: () => Library.remove(c.arg) } }) },
-      { label: 'ARTIST', value: tr.artist || '--', dim: true },
-      { label: 'ALBUM', value: tr.album || '--', dim: true },
-      { label: 'FORMAT', value: [tr.kbps ? tr.kbps + 'K' : '', tr.fmt || ''].filter(Boolean).join(' '), dim: true },
-      { label: 'SIZE', value: fmtBytes(tr.size || 0), dim: true },
-    ];
-  },
-};
+/* FX screen and backup are wired in later milestones */
+const FX = { open() { toast('EQ + TAPE', 'SOON', 900); }, draw() { return false; } };
+const Backup = { save() { toast('BACKUP', 'SOON', 900); }, pick() { toast('RESTORE', 'SOON', 900); } };
 
 /* ---------- 24. now playing: cover, text, visualiser, waveform scrubber --- */
 
@@ -3355,13 +3879,45 @@ listeners.push(() => {
   KEYS.shuf.el.classList.toggle('active', S.shuffle);
   KEYS.rpt.el.classList.toggle('active', S.repeat > 0);
   KEYS.air.el.classList.toggle('active', S.wireless);
-  KEYS.shift.el.classList.toggle('active', S.shift);
-  KEYS.shift.el.setAttribute('aria-pressed', String(S.shift));
   $('#device').classList.toggle('is-hold', S.hold);
   applyEdition();
   KEYS.menu.el.classList.toggle('active', S.screen === 'list');
   KEYS.add.el.classList.toggle('active', typeof Library !== 'undefined' && Library.busy);
 });
+
+/* ---------- 29b. accessibility: the display, in words -------------------- */
+const Access = {
+  el: $('#srDisplay'), last: '', timer: 0,
+  describe() {
+    if (S.power === 'off') return 'MP-1 is off. Tap anywhere to power on.';
+    if (S.power === 'boot') return 'Starting.';
+    const c = Nav.top();
+    if (S.screen === 'list' && c) {
+      if (c.id === 'search') {
+        const n = Nav.items(c).length;
+        return c.arg.focus === 'q' ? `Search. Typed: ${c.arg.q || 'nothing'}. Letter ${SEARCH_CHARS[c.arg.ci] === ' ' ? 'space' : SEARCH_CHARS[c.arg.ci]}. ${n} results.`
+          : `Search results. ${(Nav.items(c)[c.sel] || {}).label || ''}. ${c.sel + 1} of ${n}.`;
+      }
+      const def = VIEWS[c.id], items = Nav.items(c), it = items[c.sel];
+      const title = typeof def.title === 'function' ? def.title(c) : def.title;
+      if (!items.length) return `${title}. Empty.`;
+      if (def.static) return `${title}. ` + items.map(i => `${i.label}: ${i.value}`).join('. ') + '.';
+      const sel = items.filter(i => !i.head);
+      return `${title}. ${it ? it.label + (it.value ? ', ' + it.value : '') : ''}. ${sel.indexOf(it) + 1} of ${sel.length}.`;
+    }
+    if (!S.tracks.length) return 'No songs. Press Add songs.';
+    const tr = S.tracks[S.cur];
+    if (!tr) return `${S.tracks.length} songs.`;
+    return `${S.playing ? 'Playing' : 'Paused'}: ${tr.title}, by ${artistOf(tr)}. Song ${S.cur + 1} of ${S.tracks.length}.`;
+  },
+  announce() {
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      const s = this.describe();
+      if (s !== this.last) { this.last = s; this.el.textContent = s; }
+    }, 300);
+  },
+};
 
 /* ---------- 30. frame loop: runs only while something moves -------------
    Physics steppers and the display ask for frames; when everything is at
@@ -3476,7 +4032,7 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') {
 /* debug/test hooks (harmless in production) */
 window.__mp1 = { S, LCD, powerOn, commit, overlay, toast, render: () => { LCD.dirty = true; renderDisplay(now()); },
   step: (ms) => { for (let i = 0; i < ms / 16.67; i++) for (const a of anims) if (a(1 / 60, now()) === false) anims.delete(a); },
-  Enc, KEYS, Nav, App, Library, Player, Engine, DB, Covers, Tags, readMeta, Spec, Wave, Store, fault, OV, THEMES, freezeBoot: ms => { bootFreeze = ms; LCD.dirty = true; } };
+  Enc, KEYS, Nav, App, Library, Player, Engine, DB, Covers, Tags, readMeta, Spec, Wave, Store, fault, OV, THEMES, Shift, Queue, Sleep, Search, Lists, VIEWS, Access, freezeBoot: ms => { bootFreeze = ms; LCD.dirty = true; } };
 window.__errs = [];
 addEventListener('error', e => window.__errs.push(String(e.message)));
 </script>
