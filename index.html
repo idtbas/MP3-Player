@@ -471,6 +471,14 @@ body {
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .enc__a11y { position: absolute; left: 90px; top: 408px; width: 200px; height: 200px; opacity: 0; pointer-events: none; margin: 0; }
 
+/* keyboard / switch-control focus: a thin printed ring, like a manual callout */
+.key:focus-visible::after, .sw:focus-visible::after {
+  content: ""; position: absolute; inset: -7px; border-radius: 14px;
+  border: 1.2px solid var(--orange); pointer-events: none;
+}
+.sw:focus-visible::after { inset: -6px -7px; border-radius: 12px; }
+.board:has(#encA11y:focus-visible) .enc__well { outline: 1.2px solid var(--orange); outline-offset: 6px; }
+
 @media (prefers-reduced-motion: reduce) {
   .led.blink i, .led.breathe i, .key.blink .key__glow { animation: none; opacity: .8; }
   .led i, .key__glow { transition: none; }
@@ -591,8 +599,9 @@ body {
         <div class="enc__spec" id="encSpec"></div>
         <div class="enc__hit" id="encHit" aria-hidden="true"></div>
       </div>
-      <input type="range" id="encA11y" class="enc__a11y" min="0" max="100" step="1" value="50" aria-label="Encoder">
-      <button type="button" id="encPushA11y" class="sr-only">Encoder push, OK</button>
+      <input type="range" id="encA11y" class="enc__a11y" min="0" max="100" step="1" value="50" aria-label="Encoder 10, turn" aria-valuetext="Off">
+      <button type="button" id="encPushA11y" class="sr-only">Encoder 10, push: OK</button>
+      <button type="button" id="encHoldA11y" class="sr-only">Encoder 10, hold: change mode or options</button>
       <span class="led" id="ledVol"  style="left:26px;top:403px;--c:var(--orange)"><i></i></span>
       <span class="led" id="ledSeek" style="left:26px;top:415px;--c:var(--orange)"><i></i></span>
       <span class="led" id="ledScrl" style="left:26px;top:427px;--c:var(--orange)"><i></i></span>
@@ -1051,6 +1060,7 @@ const F5 = { w: 5, h: 7, adv: 6, g: {} }, F3 = { w: 3, h: 5, adv: 4, g: {} };
     '[': '0E08080808080E', '\\': '10100804020101', ']': '0E02020202020E', '^': '040A1100000000',
     '_': '0000000000001F', '|': '04040404040404', '·': '00000004000000', '~': '00000815020000',
     '×': '00110A040A1100', '…': '00000000001500',
+    'Ä': '0A000E111F1111', 'Ö': '0A000E1111110E', 'Ü': '0A00111111110E',
   };
   for (const k in f5) {
     const s = f5[k], rows = new Uint8Array(7);
@@ -1067,7 +1077,7 @@ const F5 = { w: 5, h: 7, adv: 6, g: {} }, F3 = { w: 3, h: 5, adv: 4, g: {} };
     '/': '11244', '%': '51245', '>': '42124', '<': '12421', '(': '24442', ')': '42224', '!': '22202',
     '?': '61202', '#': '57575', '&': '25253', "'": '22000', '"': '55000', '_': '00007', '=': '07070',
     '*': '05250', '[': '64446', ']': '32223', '·': '00200', '@': '75747', '|': '22222', '×': '05250',
-    '…': '00005',
+    '…': '00005', 'Ä': '52575', 'Ö': '52552', 'Ü': '50557',
   };
   for (const k in f3) {
     const s = f3[k], rows = new Uint8Array(5);
@@ -1076,14 +1086,18 @@ const F5 = { w: 5, h: 7, adv: 6, g: {} }, F3 = { w: 3, h: 5, adv: 4, g: {} };
   }
 })();
 
-/* Display text is uppercase ASCII; accents are folded, unknown glyphs dotted. */
+/* Display text is uppercase ASCII plus Ä Ö Ü (German titles must keep their
+   meaning: KÜHLE is not KUHLE). Other accents fold, unknown glyphs are dotted. */
+const UMLAUT = { A: 'Ä', O: 'Ö', U: 'Ü' };
 function norm(s) {
   return String(s == null ? '' : s)
     .replace(/ß/g, 'ss').replace(/[Ææ]/g, 'AE').replace(/[Øø]/g, 'O').replace(/[Œœ]/g, 'OE')
-    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .normalize('NFD').replace(/([AOUaou])\u0308/g, '$1\u0001').replace(/[\u0300-\u036f]/g, '')
     .replace(/[‘’´`]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, '-')
-    .toUpperCase();
+    .toUpperCase().replace(/([AOU])\u0001/g, (m, c) => UMLAUT[c]);
 }
+/* search and matching: the encoder types A–Z, so Ä Ö Ü match A O U */
+const fold = s => norm(s).replace(/[ÄÖÜ]/g, c => ({ Ä: 'A', Ö: 'O', Ü: 'U' })[c]);
 const textW = (s, f = F5, sc = 1) => (s.length ? s.length * f.adv - 1 : 0) * sc;
 function text(s, x, y, f = F5, v = INK.LIT, sc = 1) {
   s = norm(s);
@@ -1109,6 +1123,7 @@ function text(s, x, y, f = F5, v = INK.LIT, sc = 1) {
 const textC = (s, cxm, y, f = F5, v = INK.LIT, sc = 1) => text(s, Math.round(cxm - textW(norm(s), f, sc) / 2), y, f, v, sc);
 const textR = (s, xr, y, f = F5, v = INK.LIT) => text(s, xr - textW(norm(s), f), y, f, v);
 const fitChars = (w, f) => Math.max(1, Math.floor((w + 1) / f.adv));
+const ellipsize = (s, w, f) => { s = norm(s); const n = fitChars(w, f); return s.length <= n ? s : s.slice(0, n - 1).trimEnd() + '…'; };
 /* long labels inside [x, x+w): scroll with a rest at the start, or — with
    reduced motion — flip page by page without moving. True while animating. */
 const MARQUEE_SPEED = 22, MARQUEE_GAP = 24, MARQUEE_REST = 1.2, PAGE_FLIP_S = 2.6;
@@ -1341,9 +1356,11 @@ const LCD = {
 /* ---------- 10. overlays: designed panels that take over the screen ------ */
 const OV = { kind: null, until: 0, a: null, b: null, start: 0 };
 function overlay(kind, a, b, ms = 1100) {
+  const same = OV.kind === kind && OV.a === a && OV.b === b;
   OV.kind = kind; OV.a = a; OV.b = b; OV.start = now(); OV.until = OV.start + ms;
   LCD.dirty = true;
   wake();
+  if (!same) Access.overlay(kind, a, b);
 }
 function toast(a, b, ms) { overlay('toast', a, b, ms); }
 /* failures: a warning glyph, what happened, and what to do next */
@@ -1639,6 +1656,9 @@ function hapticTick() {                 // detent haptics, rate-limited
 /* ---------- 13. rubber keys ---------------------------------------------- */
 const KEY_PRESS = { k: 2600, c: 72 };      // stiff, near-critical: bottoms out fast
 const KEY_RELEASE = { k: 820, c: 23 };     // softer: springs back with a ~25% overshoot
+const KEY_RELEASE_CALM = { k: 820, c: 58 };  // reduced motion: critically damped, no bounce
+const KEY_SLOP = 14;                       // design px a finger may drift off a key
+const POINTER_CLICK_MS = 700;              // a click this soon after a touch is the touch's own
 class Key {
   constructor(el) {
     this.el = el;
@@ -1646,18 +1666,38 @@ class Key {
     this.cap = $('.key__cap', el);
     this.shadow = $('.key__shadow', el);
     this.sp = new Spring(KEY_PRESS.k, KEY_PRESS.c);
-    this.pid = null; this.holdTimer = 0; this.longFired = false;
+    this.pid = null; this.holdTimer = 0; this.longFired = false; this.box = null; this.lastPointerT = -1e9;
     this.stepper = dt => { const m = this.sp.step(dt); this.render(); return m || this.pid != null; };
     el.addEventListener('pointerdown', e => this.down(e));
+    el.addEventListener('pointermove', e => this.move(e));
     el.addEventListener('pointerup', e => this.up(e, false));
     el.addEventListener('pointercancel', e => this.up(e, true));
     el.addEventListener('lostpointercapture', e => this.up(e, true));
+    // VoiceOver double-tap and Switch Control arrive as a bare click
+    el.addEventListener('click', () => { if (now() - this.lastPointerT > POINTER_CLICK_MS) this.tapVirtual(); });
   }
   down(e) {
     if (this.pid != null) return;            // one finger per key, others are free
     e.preventDefault();
-    this.pid = e.pointerId;
+    this.pid = e.pointerId; this.lastPointerT = now();
     try { this.el.setPointerCapture(e.pointerId); } catch (_) { /* synthetic pointer */ }
+    const r = this.el.getBoundingClientRect(), m = KEY_SLOP * deviceScale();
+    this.box = [r.left - m, r.top - m, r.right + m, r.bottom + m];
+    this.press();
+  }
+  /* a finger sliding off the key lets it go, like rubber would: no release action */
+  move(e) {
+    if (e.pointerId !== this.pid || !this.box) return;
+    const [l, t, r, b] = this.box;
+    if (e.clientX < l || e.clientX > r || e.clientY < t || e.clientY > b) this.up(e, true);
+  }
+  up(e, cancelled) {
+    if (this.pid == null || e.pointerId !== this.pid) return;
+    this.pid = null; this.lastPointerT = now();
+    try { if (this.el.hasPointerCapture(e.pointerId)) this.el.releasePointerCapture(e.pointerId); } catch (_) {}
+    this.release(cancelled);
+  }
+  press() {
     Object.assign(this.sp, KEY_PRESS); this.sp.target = 1;
     this.sp.step(1 / 120); this.render();    // respond in this very frame
     animate(this.stepper);
@@ -1668,15 +1708,28 @@ class Key {
     this.holdTimer = setTimeout(() => { this.longFired = true; App.keyLong(this.name); }, 460);
     App.keyDown(this.name);
   }
-  up(e, cancelled) {
-    if (this.pid == null || e.pointerId !== this.pid) return;
-    this.pid = null;
+  release(cancelled) {
     clearTimeout(this.holdTimer);
-    Object.assign(this.sp, KEY_RELEASE); this.sp.target = 0;
+    Object.assign(this.sp, REDUCED.matches ? KEY_RELEASE_CALM : KEY_RELEASE); this.sp.target = 0;
     animate(this.stepper);
     Snd.keyUp();
     App.keyUp(this.name, cancelled, this.longFired);
   }
+  /* screen reader / switch access: a complete press and release in one go,
+     inside the click's user activation so ADD and AIR can open system UI */
+  tapVirtual() {
+    if (this.pid != null) return;
+    if (S.power === 'off') return powerOn();
+    this.press();
+    clearTimeout(this.holdTimer);
+    this.release(false);
+    this.sp.x = Math.max(this.sp.x, 0.85); this.render();   // still show the key going down
+  }
+  /* hardware keyboard: 1–9 hold the numbered keys for as long as they are held */
+  kbDown() { if (this.pid != null) return; if (S.power === 'off') return powerOn(); this.pid = 'kb'; this.box = null; this.press(); }
+  kbUp() { if (this.pid !== 'kb') return; this.pid = null; this.release(false); }
+  /* the system took the finger away (call, app switch, rotation): let go without the release action */
+  cancel() { if (this.pid == null) return; const id = this.pid; this.pid = null; this.box = null; this.release(true); return id; }
   render() {
     const x = this.sp.x, k = clamp(x, -0.4, 1);
     this.cap.style.transform = `translate3d(0,${(x * 3.4).toFixed(2)}px,0) scale(${(1 - x * 0.014).toFixed(4)})`;
@@ -1757,20 +1810,39 @@ const Enc = {
     this.pid = null;
     clearTimeout(this.timer);
     this.press.target = 0;
-    if (!this.moved && !this.longFired && !cancelled) {
-      // a push: full click down, then release
-      this.press.x = Math.max(this.press.x, 0.9); this.render();
-      Snd.keyDown(false); Hap.tap();
-      setTimeout(() => Snd.keyUp(), 60);
-      App.encPress();
-    }
+    if (!this.moved && !this.longFired && !cancelled) this.push();
     const t = e.timeStamp || now();
     if (t - this.lastT > 90) this.omega = 0;       // finger stopped before lifting
     this.omega = clamp(this.omega, -40, 40);
-    if (S.hold) this.omega = 0;
+    if (S.hold || REDUCED.matches || cancelled) this.omega = 0;   // calm: no free spin
     animate(this.stepper);
     App.encRelease();
   },
+  /* a push: full click down, then release */
+  push() {
+    this.press.x = Math.max(this.press.x, 0.9); this.press.target = 0; this.render();
+    animate(this.stepper);
+    Snd.keyDown(false); Hap.tap();
+    setTimeout(() => Snd.keyUp(), 60);
+    App.encPress();
+  },
+  /* push and hold, from the accessibility stand-in */
+  hold() {
+    this.press.x = 1; this.press.target = 0; this.render();
+    animate(this.stepper);
+    Snd.thunk(); Hap.tap();
+    App.encLong();
+  },
+  /* one detent from VoiceOver, Switch Control or a keyboard */
+  nudge(dir) {
+    if (S.power === 'off') return powerOn();
+    if (S.hold) { App.locked(); return; }
+    this.omega = 0;
+    this.setAngle(Math.round(this.angle / this.STEP) * this.STEP + dir * this.STEP);
+    animate(this.stepper);
+    App.encRelease();
+  },
+  cancel() { if (this.pid == null) return; this.up({ pointerId: this.pid, timeStamp: now() }, true); },
   setAngle(a) {
     this.angle = a;
     const idx = Math.round(a / this.STEP);
@@ -1837,17 +1909,19 @@ class Switch {
   constructor(el, get, set) {
     this.el = el; this.get = get; this.set = set;
     this.thumb = $('.sw__thumb', el); this.flag = $('.sw__flag', el);
-    this.sp = new Spring(1100, 24, get() ? 1 : 0);
-    this.pid = null; this.sx = 0; this.x0 = 0; this.dragged = false;
+    this.sp = new Spring(1100, REDUCED.matches ? 66 : 24, get() ? 1 : 0);
+    this.pid = null; this.sx = 0; this.x0 = 0; this.dragged = false; this.lastPointerT = -1e9;
     this.stepper = dt => { const m = this.sp.step(dt); this.render(); return m || this.pid != null; };
     el.addEventListener('pointerdown', e => {
       if (this.pid != null) return;
       e.preventDefault();
-      this.pid = e.pointerId;
+      this.pid = e.pointerId; this.lastPointerT = now();
       try { el.setPointerCapture(e.pointerId); } catch (_) {}
       this.sx = e.clientX; this.x0 = this.sp.x; this.dragged = false;
       Hap.tap();
     });
+    // VoiceOver double-tap / Switch Control: flip it
+    el.addEventListener('click', () => { if (now() - this.lastPointerT > POINTER_CLICK_MS) this.flip(); });
     el.addEventListener('pointermove', e => {
       if (e.pointerId !== this.pid) return;
       const dx = (e.clientX - this.sx) / deviceScale();
@@ -1858,19 +1932,29 @@ class Switch {
         this.render();
       }
     });
-    const end = (e, cancel) => {
+    this.end = (e, cancel) => {
       if (this.pid == null || e.pointerId !== this.pid) return;
-      this.pid = null;
+      this.pid = null; this.lastPointerT = now();
       const was = this.get();
-      const next = this.dragged ? this.sp.x > 0.5 : (cancel ? was : !was);
+      const next = cancel ? was : this.dragged ? this.sp.x > 0.5 : !was;
       this.sp.target = next ? 1 : 0;
       animate(this.stepper);
       if (next !== was) { Snd.thunk(); Hap.tap(); this.set(next); }
     };
-    el.addEventListener('pointerup', e => end(e, false));
-    el.addEventListener('pointercancel', e => end(e, true));
+    el.addEventListener('pointerup', e => this.end(e, false));
+    el.addEventListener('pointercancel', e => this.end(e, true));
+    el.addEventListener('lostpointercapture', e => this.end(e, true));
     this.render();
   }
+  flip() {
+    if (this.pid != null) return;
+    const next = !this.get();
+    this.sp.target = next ? 1 : 0;
+    animate(this.stepper);
+    Snd.thunk(); Hap.tap(); this.set(next);
+  }
+  /* a drag the system interrupted snaps back to where the switch really is */
+  cancel() { if (this.pid != null) this.end({ pointerId: this.pid }, true); }
   sync() { this.sp.target = this.get() ? 1 : 0; animate(this.stepper); }
   render() {
     const x = this.sp.x;
@@ -2158,9 +2242,9 @@ const SEARCH_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -';
 const Search = {
   open() { Nav.open('search', { arg: { q: '', ci: 0, focus: 'q' } }); },
   results(q) {
-    q = norm(q).trim();
+    q = fold(q).trim();
     if (!q) return [];
-    return S.tracks.filter(t => norm(`${t.title} ${artistOf(t)} ${albumOf(t)}`).includes(q)).map(t => t.id);
+    return S.tracks.filter(t => fold(`${t.title} ${artistOf(t)} ${albumOf(t)}`).includes(q)).map(t => t.id);
   },
   turn(c, dir) {
     if (c.arg.focus === 'q') { c.arg.ci = (c.arg.ci + dir + SEARCH_CHARS.length) % SEARCH_CHARS.length; commit(); return; }
@@ -2218,12 +2302,9 @@ function drawSearch(c, t) {
     const k = c.top + i, it = items[k], y = y0 + i * 9;
     const sel = !qf && k === c.sel;
     if (sel) rect(0, y - 1, LW, 9, INK.LIT);
-    const ox0 = cx0, ox1 = cx1;
-    clip(2, 0, 96, LH);
-    text(it.label, 2, y, F5, sel ? INK.OFF : INK.LIT);
-    clip(100, 0, 158, LH);
-    text(it.value, 100, y + 1, F3, sel ? INK.OFF : INK.DIM);
-    cx0 = ox0; cx1 = ox1;
+    // whole letters only: a long title ends in an ellipsis, never in half a glyph
+    text(ellipsize(it.label, 94, F5), 2, y, F5, sel ? INK.OFF : INK.LIT);
+    text(ellipsize(it.value, 58, F3), 100, y + 1, F3, sel ? INK.OFF : INK.DIM);
   }
   return !REDUCED.matches;
 }
@@ -2339,6 +2420,7 @@ const Shift = {
     k.classList.toggle('active', this.held || this.locked);
     k.classList.toggle('blink', this.latched && !this.held && !this.locked);
     k.setAttribute('aria-pressed', String(S.shift));
+    Access.labels();
     LCD.dirty = true; wake();
   },
   down() {
@@ -3665,7 +3747,7 @@ const Library = {
       try {
         const { meta, pic } = await readMeta(f);
         if (meta.fmt === 'MP3' && !meta.kbps && f.size > 0) { skipped++; continue; }   // no MPEG frames: not really an MP3
-        const dup = S.tracks.find(t => t.size === f.size && norm(t.title) === norm(meta.title));
+        const dup = S.tracks.find(t => t.size === f.size && fold(t.title) === fold(meta.title));
         if (dup) {
           if (dupPolicy === 'skipAll') { skipped++; continue; }
           OV.kind = null;
@@ -3790,7 +3872,7 @@ $('#filePick').addEventListener('change', e => Library.import(e.target.files));
    matched back by file name + size, or by title + artist + size.         */
 const BACKUP_KIND = 'mp1-library-backup', BACKUP_FORMAT = 1;
 const trackKey = t => `${t.name}|${t.size}`;
-const trackKey2 = t => `${norm(t.title)}|${norm(t.artist)}|${t.size}`;
+const trackKey2 = t => `${fold(t.title)}|${fold(t.artist)}|${t.size}`;
 const Backup = {
   build() {
     const key = id => { const t = byId(id); return t ? trackKey(t) : null; };
@@ -4004,7 +4086,7 @@ const Spec = {
 };
 /* visualiser 2: oscilloscope, triggered on a rising zero crossing */
 const Scope = {
-  buf: null, decay: 0,
+  buf: null, decay: 0, gain: 1,
   draw(y0, t) {
     const mid = y0 - VIS_H / 2, live = S.playing && Engine.analysing();
     dots(0, mid, LW, INK.DIM, 4);
@@ -4016,9 +4098,13 @@ const Scope = {
     let s = 0;
     for (let i = 1; i < b.length / 2; i++) if (b[i - 1] < 128 && b[i] >= 128) { s = i; break; }
     const stride = Math.max(1, Math.floor((b.length - s) / LW / 2));
+    // auto-ranging, like a bench scope: quiet passages still fill the window
+    let pk = 4;
+    for (let x = 0; x < LW; x++) { const a = Math.abs(b[s + x * stride] - 128); if (a > pk) pk = a; }
+    this.gain = lerp(this.gain, clamp(104 / pk, 1, 5), pk * this.gain > 120 ? 0.5 : 0.06);
     let py = null;
     for (let x = 0; x < LW; x++) {
-      const v = b[s + x * stride] - 128;
+      const v = (b[s + x * stride] - 128) * this.gain;
       const y = Math.round(clamp(mid - v / 128 * (VIS_H / 2 + 2), y0 - VIS_H, y0));
       if (py == null) px(x, y, INK.LIT);
       else { const a = Math.min(py, y), h = Math.abs(py - y) + 1; vline(x, a, h, Math.abs(v) > 100 ? INK.ACC : INK.LIT); }
@@ -4095,9 +4181,17 @@ function drawNow(t) {
     anim = true;
   } else {
     const chips = [];
-    if (S.sleepUntil) chips.push('Z ' + (S.sleepUntil === 'eot' ? 'END' : Math.ceil((S.sleepUntil - Date.now()) / 60000) + 'M'));
-    if ((S.set.xfade || 0) > 0 && S.set.out === 'dsp') chips.push('XF' + S.set.xfade);
-    if (chips.length) textC(chips.join(' · '), LW / 2, 85, F3, INK.DIM);
+    if (S.sleepUntil) chips.push({ ic: 'moon', s: S.sleepUntil === 'eot' ? 'END' : Math.ceil((S.sleepUntil - Date.now()) / 60000) + 'M' });
+    if ((S.set.xfade || 0) > 0 && S.set.out === 'dsp') chips.push({ s: 'XF' + S.set.xfade });
+    if (chips.length) {
+      const SEP = ' · ', w = chips.reduce((a, c, i) => a + (i ? textW(SEP, F3) + 1 : 0) + (c.ic ? 7 : 0) + textW(c.s, F3), 0);
+      let x = Math.round((LW - w) / 2);
+      chips.forEach((c, i) => {
+        if (i) x += text(SEP, x, 85, F3, INK.DIM) + 1;
+        if (c.ic) { icon(c.ic, x, 84, INK.DIM); x += 7; }
+        x += text(c.s, x, 85, F3, INK.DIM) + 1;
+      });
+    }
   }
   if (!wave) Wave.request(tr);
   return anim || S.playing;
@@ -4188,6 +4282,22 @@ const Air = {
 };
 
 /* ---------- 27. interruptions, visibility, background safety ------------ */
+/* nothing may stay pressed: the system can take a finger away at any time
+   (notification centre, a call, app switch, rotation). Every input lets go
+   without firing its release action, and a scan in progress stops.       */
+const Inputs = {
+  releaseAll() {
+    for (const k of Object.values(KEYS)) k.cancel();
+    Enc.cancel(); SwHold.cancel(); SwSnd.cancel();
+    Player.scanStop();
+  },
+  held() { return Object.values(KEYS).filter(k => k.pid != null).map(k => k.name).concat(Enc.pid != null ? ['enc'] : []); },
+};
+/* last line of defence: when the last finger leaves the glass, any key that
+   still thinks it is held (a lost pointerup) is let go                     */
+const releaseIfNoTouches = e => { if (!e.touches || e.touches.length) return; setTimeout(() => { for (const k of Object.values(KEYS)) if (k.pid != null && k.pid !== 'kb') k.cancel(); Enc.cancel(); }, 80); };
+document.addEventListener('touchend', releaseIfNoTouches, { capture: true, passive: true });
+document.addEventListener('touchcancel', releaseIfNoTouches, { capture: true, passive: true });
 const Interrupt = {
   pausedBySystem: false, sessionInterrupted: false, ctxDropped: false, watching: false, lastCtx: '',
   systemPaused() { this.pausedBySystem = true; },
@@ -4202,7 +4312,9 @@ const Interrupt = {
       } catch (e) {}
     }
     document.addEventListener('visibilitychange', () => this.visibility());
-    addEventListener('pagehide', () => savePersisted(true));
+    addEventListener('pagehide', () => { Inputs.releaseAll(); savePersisted(true); });
+    addEventListener('blur', () => Inputs.releaseAll());
+    matchMedia('(orientation: landscape) and (max-height: 520px)').addEventListener('change', e => { if (e.matches) Inputs.releaseAll(); });
     addEventListener('pageshow', e => { if (e.persisted) { relayout(); LCD.dirty = true; } });
   },
   watchCtx() {
@@ -4226,6 +4338,7 @@ const Interrupt = {
   },
   visibility() {
     if (document.hidden) {
+      Inputs.releaseAll();
       savePersisted(true);
       Engine.sync();               // silent analysis shadow rests while hidden
       return;
@@ -4305,6 +4418,9 @@ listeners.push(() => {
 });
 
 /* ---------- 29b. accessibility: the display, in words -------------------- */
+/* menu text is printed in capitals; spoken, it reads better in lower case.
+   Song titles (mixed case from the tags) are left exactly as they are.   */
+const spoken = v => { const s = String(v == null ? '' : v); return /[a-z]/.test(s) ? s : s.toLowerCase(); };
 const Access = {
   el: $('#srDisplay'), last: '', timer: 0,
   describe() {
@@ -4318,11 +4434,11 @@ const Access = {
           : `Search results. ${(Nav.items(c)[c.sel] || {}).label || ''}. ${c.sel + 1} of ${n}.`;
       }
       const def = VIEWS[c.id], items = Nav.items(c), it = items[c.sel];
-      const title = typeof def.title === 'function' ? def.title(c) : def.title;
+      const title = spoken(typeof def.title === 'function' ? def.title(c) : def.title);
       if (!items.length) return `${title}. Empty.`;
-      if (def.static) return `${title}. ` + items.map(i => `${i.label}: ${i.value}`).join('. ') + '.';
+      if (def.static) return `${title}. ` + items.map(i => `${spoken(i.label)}: ${spoken(i.value)}`).join('. ') + '.';
       const sel = items.filter(i => !i.head);
-      return `${title}. ${it ? it.label + (it.value ? ', ' + it.value : '') : ''}. ${sel.indexOf(it) + 1} of ${sel.length}.`;
+      return `${title}. ${it ? spoken(it.label) + (it.value ? ', ' + spoken(it.value) : '') : ''}. ${sel.indexOf(it) + 1} of ${sel.length}.`;
     }
     if (!S.tracks.length) return 'No songs. Press Add songs.';
     const tr = S.tracks[S.cur];
@@ -4333,10 +4449,131 @@ const Access = {
     clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       const s = this.describe();
-      if (s !== this.last) { this.last = s; this.el.textContent = s; }
+      $('#lcd').setAttribute('aria-label', 'Display. ' + s);
+      if (s !== this.last) this.say(s);
     }, 300);
   },
+  say(s) { this.last = s; this.el.textContent = s; },
+  /* panels that take over the screen are spoken once when they appear */
+  overlay(kind, a, b) {
+    const w = v => String(v || '').toLowerCase();
+    let s = '';
+    switch (kind) {
+      case 'toast': s = `${w(a)}${b ? '. ' + w(b) : ''}.`; break;
+      case 'error': s = `${w(a.title)}. ${w(a.detail)}. ${w(a.hint)}.`; break;
+      case 'storage': s = `Storage almost full. ${a.free} free.`; break;
+      case 'hold': s = a ? 'Hold is on. All controls are locked.' : 'Hold is off.'; break;
+      case 'mode': s = `Encoder mode: ${['volume', 'seek', 'scroll'][a]}.`; break;
+      case 'sleep': s = a === 'night' ? 'Sleep timer ended. Paused.' : a === 'eot' ? 'Sleep at the end of this song.' : a ? `Sleep in ${a} minutes.` : 'Sleep timer off.'; break;
+      case 'speed': s = `Speed ${fmtSpeed(a).replace('×', ' times')}.`; break;
+      case 'fav': s = a ? 'Added to favourites.' : 'Removed from favourites.'; break;
+      case 'air': s = a ? 'Wireless on.' : 'Wireless off.'; break;
+      case 'add': if (a.k === 0) s = `Adding ${a.n} ${a.n === 1 ? 'song' : 'songs'}.`; break;
+      case 'shiftmap': s = 'Shift functions: 02 setup, 03 favourite, 04 sleep, 05 visualiser, 06 effects, 07 recent, 08 stop, 09 queue. Encoder: speed. Push: find.'; break;
+    }
+    if (s) { clearTimeout(this.timer); this.say(s); this.timer = setTimeout(() => this.announce(), 1600); }
+  },
+  /* what one detent of the encoder does right now, for the adjustable stand-in */
+  encText() {
+    if (S.power !== 'on') return 'Off';
+    if (S.shift) return `Speed ${fmtSpeed(S.set.speed).replace('×', ' times')}`;
+    const c = Nav.top();
+    if (S.screen === 'list' && c) {
+      if (c.id === 'search' && c.arg.focus === 'q') return `Letter ${SEARCH_CHARS[c.arg.ci] === ' ' ? 'space' : SEARCH_CHARS[c.arg.ci]}`;
+      const it = Nav.items(c)[c.sel];
+      return it ? spoken(it.label) + (it.value ? ', ' + spoken(it.value) : '') : 'Empty';
+    }
+    if (S.encMode === 0) return Engine.volumeWorks() ? `Volume ${Math.round(S.vol * 100)} percent` : 'Volume: use the side buttons';
+    if (S.encMode === 1) return `Position ${fmtTime(S.t)} of ${fmtTime(S.dur || 0)}`;
+    return 'Scroll the song list';
+  },
+  /* second functions take over the key names while SHIFT is active */
+  labels() {
+    const sh = S.shift, L = (k, a) => { if (KEYS[k].el.getAttribute('aria-label') !== a) KEYS[k].el.setAttribute('aria-label', a); };
+    L('shift', sh ? 'Shift, active' : 'Shift');
+    L('menu', sh ? 'Setup' : Nav.stack.length ? 'Back' : 'Menu');
+    L('add', sh ? 'Favourite' : 'Add songs');
+    L('air', sh ? 'Sleep timer' : S.wireless ? 'Wireless output, on' : 'Wireless output');
+    L('shuf', sh ? 'Visualiser' : 'Shuffle');
+    L('rpt', sh ? 'Effects' : `Repeat ${['off', 'all', 'one'][S.repeat]}`);
+    L('prev', sh ? 'Recent' : 'Previous');
+    L('play', sh ? 'Stop' : S.playing ? 'Pause' : 'Play');
+    L('next', sh ? 'Queue' : 'Next');
+    KEYS.shuf.el.setAttribute('aria-pressed', String(!sh && S.shuffle));
+    const r = $('#encA11y'), v = this.encText();
+    if (r.getAttribute('aria-valuetext') !== v) r.setAttribute('aria-valuetext', v);
+  },
 };
+listeners.push(() => Access.labels());
+
+/* the encoder's stand-in: VoiceOver swipes up/down (or arrow keys) turn it
+   one detent; the value snaps back to the middle so it never runs out    */
+(() => {
+  const r = $('#encA11y');
+  r.addEventListener('input', () => {
+    const d = +r.value - 50;
+    r.value = 50;
+    if (d) Enc.nudge(Math.sign(d));
+    Access.labels();
+  });
+  $('#encPushA11y').addEventListener('click', () => { if (S.power === 'off') return powerOn(); Enc.push(); });
+  $('#encHoldA11y').addEventListener('click', () => { if (S.power === 'off') return powerOn(); Enc.hold(); });
+})();
+
+/* hardware keyboard (iPad keyboards, Full Keyboard Access): the manual's
+   numbers are the shortcuts. 1–9 = keys 01–09, arrows turn 10, return pushes */
+const KB_KEYS = { 1: 'shift', 2: 'menu', 3: 'add', 4: 'air', 5: 'shuf', 6: 'rpt', 7: 'prev', 8: 'play', 9: 'next' };
+const isEl = (t, cls) => !!(t && t.classList && t.classList.contains(cls));
+function kbKey(e) {                       // digits by position, so SHIFT + 3 is still key 03 on any layout
+  const d = /^(?:Digit|Numpad)([1-9])$/.exec(e.code || '');
+  if (d) return KB_KEYS[d[1]];
+  if (KB_KEYS[e.key]) return KB_KEYS[e.key];
+  if (e.key === 'Shift') return 'shift';
+  if (e.key === 'Escape' || e.key === 'Backspace') return 'menu';
+  if (e.key === ' ' || e.key === 'Enter') return isEl(e.target, 'key') ? e.target.dataset.key : e.key === ' ' && !isEl(e.target, 'sw') ? 'play' : null;
+  return null;
+}
+document.addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const t = e.target;
+  if (t === $('#encA11y') && /Arrow/.test(e.key)) return;               // the range input turns the encoder itself
+  if (isEl(t, 'sw') && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); if (!e.repeat) (t.id === 'swHold' ? SwHold : SwSnd).flip(); return; }
+  if ((e.key === 'h' || e.key === 'H') && !e.repeat) return SwHold.flip();
+  const k = kbKey(e);
+  if (k) { e.preventDefault(); if (!e.repeat) KEYS[k].kbDown(); return; }
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); Enc.nudge(1); }
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); Enc.nudge(-1); }
+  else if (e.key === 'Enter' && !e.repeat) { e.preventDefault(); if (S.power === 'off') powerOn(); else Enc.push(); }
+});
+document.addEventListener('keyup', e => { const k = kbKey(e); if (k) KEYS[k].kbUp(); });
+
+/* landscape: the device hides and a small dot-matrix card asks to turn back */
+function drawRotate() {
+  const c = $('#rotateLcd'), g = c.getContext('2d'), P = 3, cols = c.width / P, rows = Math.floor(c.height / P);
+  const ink = new Uint8Array(cols * rows);
+  const put = (s, y, v) => {
+    let x = Math.round((cols - (s.length * F5.adv - 1)) / 2);
+    for (const ch of s) {
+      const gl = F5.g[ch] || F5.g[' '];
+      for (let ry = 0; ry < 7; ry++) for (let cx = 0; cx < 5; cx++) if (gl[ry] & (1 << (4 - cx))) ink[(y + ry) * cols + x + cx] = v;
+      x += F5.adv;
+    }
+  };
+  // a phone outline turning upright: landscape frame, arrow, portrait frame
+  const box = (x, y, w, h, v) => { for (let i = 0; i < w; i++) ink[y * cols + x + i] = ink[(y + h - 1) * cols + x + i] = v; for (let j = 0; j < h; j++) ink[(y + j) * cols + x] = ink[(y + j) * cols + x + w - 1] = v; };
+  box(56, 17, 18, 11, 1);
+  for (let i = 0; i < 7; i++) ink[22 * cols + 77 + i] = 2;
+  ink[21 * cols + 82] = ink[23 * cols + 82] = ink[20 * cols + 81] = ink[24 * cols + 81] = 2;
+  box(87, 13, 11, 18, 3);
+  put('TURN UPRIGHT', 38, 3);
+  const col = ['#141416', '#5E5A52', '#FF5A1C', '#F2EEE5'];
+  g.fillStyle = '#050506'; g.fillRect(0, 0, c.width, c.height);
+  for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+    g.fillStyle = col[ink[y * cols + x]];
+    g.fillRect(x * P, y * P, P - 1, P - 1);
+  }
+}
+drawRotate();
 
 /* ---------- 30. frame loop: runs only while something moves -------------
    Physics steppers and the display ask for frames; when everything is at
@@ -4416,6 +4653,7 @@ function finishBoot() {
   S.screen = S.tracks.length ? 'now' : 'empty';
   LCD.flicker(120);
   commit();
+  Access.announce();
 }
 $('#stage').addEventListener('pointerdown', e => {
   if (S.power === 'off') { e.stopPropagation(); e.preventDefault(); powerOn(); }
@@ -4454,7 +4692,7 @@ setTimeout(() => { if (S.tracks.length) Disk.persist(); Disk.check(true); }, 400
 /* debug/test hooks (harmless in production) */
 window.__mp1 = { S, LCD, powerOn, commit, overlay, toast, render: () => { LCD.dirty = true; renderDisplay(now()); },
   step: (ms) => { for (let i = 0; i < ms / 16.67; i++) for (const a of anims) if (a(1 / 60, now()) === false) anims.delete(a); },
-  Enc, KEYS, Nav, App, Library, Player, Engine, DB, Covers, Tags, readMeta, Spec, Wave, Store, fault, OV, THEMES, Shift, Queue, Sleep, Search, Lists, VIEWS, Access, FX, Disk, Backup, freezeBoot: ms => { bootFreeze = ms; LCD.dirty = true; } };
+  Enc, KEYS, Nav, App, Inputs, SwHold, SwSnd, Library, Player, Engine, DB, Covers, Tags, readMeta, Spec, Wave, Store, fault, OV, THEMES, Shift, Queue, Sleep, Search, Lists, VIEWS, Access, FX, Disk, Backup, freezeBoot: ms => { bootFreeze = ms; LCD.dirty = true; } };
 window.__errs = [];
 addEventListener('error', e => window.__errs.push(String(e.message)));
 </script>
