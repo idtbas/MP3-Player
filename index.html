@@ -775,7 +775,7 @@ const S = {
   encMode: 0,              // 0 VOL, 1 SEEK, 2 SCRL
   hold: false,
   wireless: false, wirelessAvail: false,
-  set: { sound: true, haptics: true, bright: 4, theme: 0, out: 'dsp', edition: 'orange', vis: 0, speed: 1, xfade: 0 },
+  set: { sound: true, haptics: true, bright: 4, theme: 0, out: 'dsp', edition: 'orange', vis: 0, speed: 1, xfade: 0, tape: 0, eq: { low: 0, mid: 0, high: 0 } },
   storageLow: false, sleepUntil: 0,
   queue: [], recent: [], ctx: { kind: 'all', key: null },
   shift: false,
@@ -1476,7 +1476,7 @@ function drawOverlay(t) {
       panel(18, 18, 124, 56);
       text('SPEED', 26, 24, F3, INK.LIT);
       textR('PITCH KEPT', 134, 24, F3, INK.DIM);
-      textC(OV.a.toFixed(2) + '×', LW / 2, 32, F5, OV.a === 1 ? INK.LIT : INK.ACC, 2);
+      textC(fmtSpeed(OV.a), LW / 2, 32, F5, OV.a === 1 ? INK.LIT : INK.ACC, 2);
       const w = 108, n = SPEEDS.length;
       SPEEDS.forEach((s, i) => {
         const x = 26 + Math.round(i * (w - 1) / (n - 1));
@@ -1534,7 +1534,7 @@ function statusBar(t, title) {
   } else if (S.hold) {
     icon('lock', 66, 0, INK.ACC); text('HOLD', 73, 1, F3, INK.ACC);
   } else if (!title) {
-    const tag = (S.set.speed || 1) !== 1 ? (S.set.speed + '×').replace('0.', '.') : ['VOL', 'SEEK', 'SCRL'][S.encMode];
+    const tag = (S.set.speed || 1) !== 1 ? fmtSpeed(S.set.speed) : ['VOL', 'SEEK', 'SCRL'][S.encMode];
     const w = textW(tag, F3) + 4, x = 80 - Math.round(w / 2);
     rect(x, 0, w, 7, INK.LIT); text(tag, x + 2, 1, F3, INK.OFF);
   }
@@ -2106,7 +2106,7 @@ const VIEWS = {
       { label: 'OUTPUT', value: S.set.out === 'dsp' ? 'DSP' : 'DIRECT', act: () => Engine.setOut(S.set.out === 'dsp' ? 'direct' : 'dsp') },
       { label: 'EQ + TAPE', sub: true, act: () => FX.open() },
       { label: 'CROSSFADE', value: S.set.xfade ? S.set.xfade + ' S' : 'GAPLESS', act: () => { S.set.xfade = XFADE_STEPS[(XFADE_STEPS.indexOf(S.set.xfade) + 1) % XFADE_STEPS.length]; } },
-      { label: 'SPEED', value: S.set.speed.toFixed(2) + '×', act: () => Player.setSpeed(SPEEDS[(SPEEDS.indexOf(S.set.speed) + 1) % SPEEDS.length]) },
+      { label: 'SPEED', value: fmtSpeed(S.set.speed), act: () => Player.setSpeed(SPEEDS[(SPEEDS.indexOf(S.set.speed) + 1) % SPEEDS.length]) },
       { label: 'SLEEP', value: Sleep.label(), act: () => Sleep.cycle() },
       { head: 'LIBRARY' },
       { label: 'BACKUP', sub: true, act: () => Backup.save() },
@@ -2427,6 +2427,7 @@ const Sleep = {
 
 /* playback speed: pitch is preserved by the media element */
 const SPEEDS = [0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2];
+const fmtSpeed = v => v.toFixed(2).replace(/0+$/, '').replace(/\.$/, '.0') + '×';
 const XFADE_STEPS = [0, 2, 4, 8];
 
 let lastHoldFlash = 0;
@@ -2846,20 +2847,35 @@ const Covers = {
 };
 
 /* ---------- 21. audio engine --------------------------------------------
-   Two <audio> elements:
-   · dsp  — routed through Web Audio: source → analyser → gain → out.
-            Gives real volume control (iOS ignores element.volume) and the
-            analyser reads the actual music.
-   · dir  — plays straight to the system output: the most robust path for
-            lock-screen playback and AirPlay. Volume = iPhone side keys.
-   In DIRECT mode the dsp element shadows the music silently (gain 0) so the
-   visualiser still analyses the real track; it pauses while hidden.       */
+   DSP output (default): two decks, each an <audio> routed into Web Audio.
+
+     deck A ─ gain ┐
+                    ├─ EQ low/mid/high ─ tape ─ analyser ─ master ─ limiter ─ out
+     deck B ─ gain ┘
+
+   Two decks make equal-power crossfades and gapless hand-overs possible;
+   the master gain gives real volume control (iOS ignores element.volume).
+
+   DIRECT output: a third <audio> plays straight to the system — the most
+   robust path with the screen locked, and what AirPlay prefers. Volume is
+   then the iPhone's side keys. Deck A shadows it silently (master at 0) so
+   the visualiser still analyses the real music; the shadow rests while
+   the page is hidden.                                                     */
 const BLESS_TIMEOUT_MS = 1500;
+const EQ_BANDS = [
+  { key: 'low',  type: 'lowshelf',  f: 120,  q: 0.7 },
+  { key: 'mid',  type: 'peaking',   f: 1000, q: 0.9 },
+  { key: 'high', type: 'highshelf', f: 7500, q: 0.7 },
+];
+const EQ_RANGE_DB = 12, TAPE_MAX = 10;
+const LIMIT_DB = -1.5;
 const Engine = {
-  dsp: null, dir: null, out: null,
-  an: null, gain: null, graph: false, blessed: false, blessing: 0, volOK: null,
+  decks: [], deck: 0, direct: null, out: null,
+  ctx: null, an: null, master: null, nodes: null, graph: false,
+  blessed: false, blessing: 0, volOK: null, xfadeTimer: 0, xfading: false,
+
   init() {
-    const mk = shadow => {
+    const mk = () => {
       const a = document.createElement('audio');
       a.preload = 'auto';
       a.setAttribute('playsinline', '');
@@ -2871,35 +2887,83 @@ const Engine = {
         a.addEventListener(ev, e => { if (a === this.out) Player.onMedia(ev, a, e); });
       return a;
     };
-    this.dsp = mk(); this.dir = mk();
-    this.out = S.set.out === 'direct' ? this.dir : this.dsp;
-    // wire the graph before any src is set: attaching a source node to an
-    // element that is already loaded can stall it. The context starts
-    // suspended and is resumed by the first gesture (unlockAudio).
-    this.graphUp();
+    this.decks = [{ el: mk(), gain: null }, { el: mk(), gain: null }];
+    this.direct = mk();
+    this.out = this.isDsp() ? this.decks[0].el : this.direct;
+    this.graphUp();                    // before any src: attaching later can stall an element
   },
+  elements() { return [this.decks[0].el, this.decks[1].el, this.direct]; },
+  isDsp() { return S.set.out !== 'direct'; },
+  active() { return this.decks[this.deck]; },
+  other() { return this.decks[1 - this.deck]; },
+
   graphUp() {
     if (this.graph) return true;
     const c = Snd.init();
     if (!c) return false;
     try {
-      const src = c.createMediaElementSource(this.dsp);
+      this.ctx = c;
+      const mix = c.createGain();
+      for (const d of this.decks) {
+        const src = c.createMediaElementSource(d.el);
+        d.gain = c.createGain();
+        d.gain.gain.value = 0;
+        src.connect(d.gain); d.gain.connect(mix);
+      }
+      this.active().gain.gain.value = 1;
+      // 3-band EQ
+      let node = mix;
+      const eq = EQ_BANDS.map(b => {
+        const f = c.createBiquadFilter();
+        f.type = b.type; f.frequency.value = b.f; f.Q.value = b.q; f.gain.value = 0;
+        node.connect(f); node = f;
+        return f;
+      });
+      // tape: saturation → roll-off → wow & flutter (modulated delay) + hiss
+      const sat = c.createWaveShaper();
+      sat.oversample = '2x';
+      const lp = c.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = 20000; lp.Q.value = 0.5;
+      const wow = c.createDelay(0.05);
+      wow.delayTime.value = 0.006;
+      node.connect(sat); sat.connect(lp); lp.connect(wow);
+      const lfo = (hz) => { const o = c.createOscillator(), g = c.createGain(); o.frequency.value = hz; g.gain.value = 0; o.connect(g); g.connect(wow.delayTime); o.start(); return g; };
+      const wowDepth = lfo(0.55), flutterDepth = lfo(6.3);
+      const hissSrc = c.createBufferSource();
+      hissSrc.buffer = Snd.noise; hissSrc.loop = true;
+      const hissHp = c.createBiquadFilter();
+      hissHp.type = 'highpass'; hissHp.frequency.value = 3500;
+      const hiss = c.createGain();
+      hiss.gain.value = 0;
+      hissSrc.connect(hissHp); hissHp.connect(hiss); hissSrc.start();
+      const tapeOut = c.createGain();
+      wow.connect(tapeOut); hiss.connect(tapeOut);
+      // analyser taps the processed music before the volume
       this.an = c.createAnalyser();
       this.an.fftSize = 2048;
       this.an.smoothingTimeConstant = 0.7;
-      this.gain = c.createGain();
-      src.connect(this.an); this.an.connect(this.gain); this.gain.connect(c.destination);
+      tapeOut.connect(this.an);
+      this.master = c.createGain();
+      tapeOut.connect(this.master);
+      // brick-wall-ish limiter: EQ boosts can never clip the output
+      const lim = c.createDynamicsCompressor();
+      lim.threshold.value = LIMIT_DB; lim.knee.value = 0; lim.ratio.value = 20;
+      lim.attack.value = 0.002; lim.release.value = 0.12;
+      this.master.connect(lim); lim.connect(c.destination);
+      this.nodes = { eq, sat, lp, wowDepth, flutterDepth, hiss, satAmt: -1 };
       this.graph = true;
       this.applyVolume();
+      this.applyFx();
     } catch (e) { this.graph = false; }
     return this.graph;
   },
+
   /* iOS: a play() inside a real gesture removes the per-element restriction
      for good, so later auto-advance and lock-screen commands just work.    */
   bless() {
     if (this.blessed) return;
     this.blessed = true;
-    for (const a of [this.dsp, this.dir]) {
+    for (const a of this.elements()) {
       if (!a.paused) continue;                    // already playing for real
       try {
         if (!a.currentSrc) {
@@ -2929,66 +2993,147 @@ const Engine = {
       } catch (e) { a.muted = false; }
     }
   },
+
   volumeWorks() {
-    if (this.out === this.dsp) return this.graph || this.volOK !== false;
+    if (this.isDsp()) return this.graph;
     if (this.volOK == null) {
-      try { const v = this.dir.volume; this.dir.volume = 0.5; this.volOK = Math.abs(this.dir.volume - 0.5) < 0.01; this.dir.volume = v; }
+      try { const v = this.direct.volume; this.direct.volume = 0.5; this.volOK = Math.abs(this.direct.volume - 0.5) < 0.01; this.direct.volume = v; }
       catch (e) { this.volOK = false; }
     }
     return this.volOK;
   },
   applyVolume() {
     const g = S.vol * S.vol;                        // perceptual taper
-    if (this.out === this.dsp) {
-      if (this.gain) this.gain.gain.setTargetAtTime(g, this.gain.context.currentTime, 0.02);
-      else try { this.dsp.volume = g; } catch (e) {}
-    } else {
-      if (this.gain) this.gain.gain.setTargetAtTime(0, this.gain.context.currentTime, 0.01);
-      try { this.dir.volume = g; } catch (e) {}
+    if (this.master) {
+      const p = this.master.gain;
+      p.cancelScheduledValues(this.ctx.currentTime);
+      p.setTargetAtTime(this.isDsp() ? g : 0, this.ctx.currentTime, 0.02);
+    }
+    if (!this.isDsp()) try { this.direct.volume = g; } catch (e) {}
+  },
+  fadeOut(ms) {
+    if (!this.master || !this.isDsp()) return;      // direct output: no level control on iOS
+    const g = this.master.gain, t = this.ctx.currentTime;
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(g.value, t);
+    g.linearRampToValueAtTime(0, t + ms / 1000);
+  },
+
+  /* EQ in dB, tape 0–10 */
+  applyFx() {
+    if (!this.nodes) return;
+    const n = this.nodes, t = this.ctx.currentTime;
+    EQ_BANDS.forEach((b, i) => n.eq[i].gain.setTargetAtTime(this.isDsp() ? clamp(S.set.eq[b.key], -EQ_RANGE_DB, EQ_RANGE_DB) : 0, t, 0.03));
+    const amt = this.isDsp() ? clamp(S.set.tape, 0, TAPE_MAX) / TAPE_MAX : 0;
+    if (n.satAmt !== amt) {
+      n.satAmt = amt;
+      if (amt === 0) n.sat.curve = null;
+      else {
+        const k = 1 + amt * 5, N = 1024, curve = new Float32Array(N), norm1 = Math.tanh(k);
+        for (let i = 0; i < N; i++) { const x = i / (N - 1) * 2 - 1; curve[i] = Math.tanh(k * x) / norm1 * (1 - amt * 0.12); }
+        n.sat.curve = curve;
+      }
+    }
+    n.lp.frequency.setTargetAtTime(20000 - amt * 13000, t, 0.05);
+    n.wowDepth.gain.setTargetAtTime(amt * 0.0011, t, 0.1);
+    n.flutterDepth.gain.setTargetAtTime(amt * 0.00012, t, 0.1);
+    n.hiss.gain.setTargetAtTime(S.playing ? amt * 0.004 : 0, t, 0.05);
+  },
+
+  setRate(r) {
+    for (const a of this.elements()) {
+      try { a.defaultPlaybackRate = r; a.playbackRate = r; a.preservesPitch = true; a.webkitPreservesPitch = true; } catch (e) {}
     }
   },
+
+  /* load into the audible path (cancels any running crossfade) */
   load(url) {
-    const shadow = this.out === this.dir ? this.dsp : this.dir;
-    this.out.src = url;
-    this.out.load();
+    this.cancelCrossfade();
+    if (this.isDsp()) {
+      const d = this.active(), o = this.other();
+      this.out = d.el;                              // whatever is loaded is what we hear
+      d.el.src = url; d.el.load();
+      if (o.el.getAttribute('src') && !o.el.paused) o.el.pause();
+      if (this.direct.getAttribute('src')) { this.direct.removeAttribute('src'); this.direct.load(); }
+    } else {
+      this.out = this.direct;
+      this.direct.src = url; this.direct.load();
+      const sh = this.decks[0].el;                  // silent analysis shadow
+      sh.src = url; sh.load();
+    }
     this.setRate(S.set.speed);
-    if (this.out === this.dir) { shadow.src = url; shadow.load(); }
-    else if (shadow.getAttribute('src')) { shadow.removeAttribute('src'); shadow.load(); }
   },
+  /* prepare the idle deck with the next song so a hand-over is instant */
+  preload(url) {
+    if (!this.isDsp() || !url || this.xfading) return;
+    const o = this.other().el;
+    if (o.getAttribute('src') === url) return;
+    o.src = url; o.preload = 'auto'; o.load();
+    this.setRate(S.set.speed);
+  },
+  ready(url) { const o = this.other().el; return this.isDsp() && this.graph && o.getAttribute('src') === url && o.readyState >= 2; },
+  /* equal-power crossfade into the idle deck; dur in seconds */
+  crossfade(url, dur) {
+    const from = this.active(), to = this.other(), c = this.ctx, t = c.currentTime;
+    if (to.el.getAttribute('src') !== url) { to.el.src = url; to.el.load(); }
+    try { to.el.currentTime = 0; } catch (e) {}
+    this.setRate(S.set.speed);
+    const N = 32, fadeIn = new Float32Array(N), fadeOut = new Float32Array(N);
+    for (let i = 0; i < N; i++) { const x = i / (N - 1); fadeIn[i] = Math.sin(x * Math.PI / 2); fadeOut[i] = Math.cos(x * Math.PI / 2); }
+    from.gain.gain.cancelScheduledValues(t); to.gain.gain.cancelScheduledValues(t);
+    from.gain.gain.setValueCurveAtTime(fadeOut, t, dur);
+    to.gain.gain.setValueCurveAtTime(fadeIn, t, dur);
+    this.deck = 1 - this.deck;
+    this.out = to.el;                                // events now come from the new deck
+    this.xfading = true;
+    const p = to.el.play();
+    if (p && p.catch) p.catch(() => {});
+    clearTimeout(this.xfadeTimer);
+    this.xfadeTimer = setTimeout(() => this.finishCrossfade(), dur * 1000 + 80);
+  },
+  finishCrossfade() {
+    const old = this.other();
+    old.el.pause();
+    try { old.gain.gain.cancelScheduledValues(this.ctx.currentTime); old.gain.gain.value = 0; } catch (e) {}
+    this.xfading = false;
+  },
+  cancelCrossfade() {
+    if (!this.xfading) return;
+    clearTimeout(this.xfadeTimer);
+    const t = this.ctx.currentTime;
+    for (const d of this.decks) d.gain.gain.cancelScheduledValues(t);
+    this.active().gain.gain.setValueAtTime(1, t);
+    this.other().gain.gain.setValueAtTime(0, t);
+    this.other().el.pause();
+    this.xfading = false;
+  },
+
   play() {
     this.graphUp();
-    const c = Snd.ctx;
+    const c = this.ctx;
     if (c && c.state !== 'running') c.resume().catch(() => {});
     this.applyVolume();
+    if (this.isDsp() && !this.xfading) this.active().gain.gain.setValueAtTime(1, c ? c.currentTime : 0);
     const p = this.out.play();
     this.sync(true);
     return p;
   },
   pause() {
+    this.cancelCrossfade();
     this.out.pause();
-    if (this.out === this.dir && !this.dsp.paused) this.dsp.pause();
+    if (!this.isDsp() && !this.decks[0].el.paused) this.decks[0].el.pause();
   },
   seek(t) {
+    this.cancelCrossfade();
     try { this.out.currentTime = t; } catch (e) {}
-    if (this.out === this.dir) try { this.dsp.currentTime = t; } catch (e) {}
+    if (!this.isDsp()) try { this.decks[0].el.currentTime = t; } catch (e) {}
   },
   get time() { return this.out.currentTime || 0; },
-  setRate(r) {
-    for (const a of [this.dsp, this.dir]) {
-      try { a.defaultPlaybackRate = r; a.playbackRate = r; a.preservesPitch = true; a.webkitPreservesPitch = true; } catch (e) {}
-    }
-  },
-  fadeOut(ms) {
-    if (!this.gain || this.out !== this.dsp) return;           // direct output: no level control on iOS
-    const g = this.gain.gain, c = this.gain.context;
-    g.cancelScheduledValues(c.currentTime);
-    g.setValueAtTime(g.value, c.currentTime);
-    g.linearRampToValueAtTime(0, c.currentTime + ms / 1000);
-  },
-  /* keep the silent analysis shadow aligned with the audible element */
+
+  /* keep the silent analysis shadow near the audible element (DIRECT) */
   sync(force) {
-    if (this.out !== this.dir || !this.graph) return;
-    const d = this.dsp, o = this.dir;
+    if (this.isDsp() || !this.graph) return;
+    const d = this.decks[0].el, o = this.direct;
     if (document.hidden || o.paused || !d.currentSrc) { if (!d.paused) d.pause(); return; }
     const t = now();
     if (d.paused || force) {
@@ -3002,28 +3147,128 @@ const Engine = {
       this.lastFix = t;
     }
   },
-  analysing() { return this.graph && (this.out === this.dsp ? !this.dsp.paused : !this.dsp.paused && !document.hidden); },
+  analysing() {
+    if (!this.graph) return false;
+    return this.isDsp() ? !this.active().el.paused : !this.decks[0].el.paused && !document.hidden;
+  },
+
   setOut(mode) {
     mode = mode === 'direct' ? 'direct' : 'dsp';
-    const next = mode === 'direct' ? this.dir : this.dsp;
-    S.set.out = mode;
-    if (next === this.out) { commit(); return; }
+    if ((mode === 'dsp') === this.isDsp()) { S.set.out = mode; commit(); return; }
     const prev = this.out, t = prev.currentTime || 0, src = prev.getAttribute('src'), wasPlaying = S.playing;
     Player.quietUntil = now() + 600;              // swallow the pause from the hand-over
-    prev.pause();
-    this.out = next;
+    this.cancelCrossfade();
+    for (const a of this.elements()) a.pause();
+    S.set.out = mode;
+    this.deck = 0;
+    this.decks[0].gain && (this.decks[0].gain.gain.value = 1);
+    this.decks[1].gain && (this.decks[1].gain.gain.value = 0);
+    this.out = mode === 'dsp' ? this.decks[0].el : this.direct;
     if (src) {
-      next.src = src; next.load();
-      const shadow = mode === 'direct' ? this.dsp : this.dir;
-      if (mode === 'direct') { shadow.src = src; shadow.load(); }
-      else if (shadow.getAttribute('src')) { shadow.removeAttribute('src'); shadow.load(); }
+      this.load(src);
       Player.pendingSeek = t;
       if (wasPlaying) Player.play();
     }
     this.applyVolume();
+    this.applyFx();
     toast('AUDIO OUT', mode === 'dsp' ? 'DSP · ENCODER VOLUME' : 'DIRECT · SIDE KEYS', 1400);
     commit();
   },
+};
+
+/* ---------- 21b. FX page: 3-band EQ, tape, crossfade, speed --------------
+   Six pixel faders. Turn to pick, push to edit (turn changes the value),
+   push again to leave, hold to reset the fader.                           */
+const FX_COLS = [
+  { key: 'low', label: 'LOW', kind: 'eq' },
+  { key: 'mid', label: 'MID', kind: 'eq' },
+  { key: 'high', label: 'HIGH', kind: 'eq' },
+  { key: 'tape', label: 'TAPE', kind: 'tape' },
+  { key: 'xfade', label: 'XFADE', kind: 'step', steps: () => XFADE_STEPS },
+  { key: 'speed', label: 'SPEED', kind: 'step', steps: () => SPEEDS },
+];
+const FX = {
+  open() { Nav.open('fx', { arg: { col: 0 } }); },
+  value(col) {
+    const s = S.set;
+    if (col.kind === 'eq') return s.eq[col.key];
+    if (col.kind === 'tape') return s.tape;
+    return s[col.key];
+  },
+  set(col, v) {
+    const s = S.set;
+    if (col.kind === 'eq') s.eq[col.key] = clamp(v, -EQ_RANGE_DB, EQ_RANGE_DB);
+    else if (col.kind === 'tape') s.tape = clamp(v, 0, TAPE_MAX);
+    else if (col.key === 'speed') { s.speed = v; Engine.setRate(v); }
+    else s[col.key] = v;
+    Engine.applyFx();
+    commit();
+  },
+  step(col, dir) {
+    const v = this.value(col);
+    if (col.kind === 'step') {
+      const st = col.steps(), i = st.indexOf(v);
+      const j = clamp((i < 0 ? 0 : i) + dir, 0, st.length - 1);
+      if (j === i) return Snd.blip(420, 0.02, 0.05);
+      return this.set(col, st[j]);
+    }
+    const lim = col.kind === 'eq' ? [-EQ_RANGE_DB, EQ_RANGE_DB] : [0, TAPE_MAX];
+    const n = clamp(v + dir, lim[0], lim[1]);
+    if (n === v) return Snd.blip(420, 0.02, 0.05);
+    this.set(col, n);
+  },
+  reset(col) { this.set(col, col.kind === 'step' ? (col.key === 'speed' ? 1 : 0) : 0); toast(col.label, 'RESET', 600); },
+  label(col) {
+    const v = this.value(col);
+    if (col.kind === 'eq') return (v > 0 ? '+' : '') + v;
+    if (col.kind === 'tape') return v ? String(v) : 'OFF';
+    if (col.key === 'xfade') return v ? v + 'S' : 'GAP';
+    return fmtSpeed(v);
+  },
+  draw(c, t) {
+    const dsp = Engine.isDsp();
+    text('FX', 0, 1, F3, INK.LIT);
+    text('EQ · TAPE · MIX', 12, 1, F3, INK.DIM);
+    textR(dsp ? 'DSP' : 'DIRECT: OUT OF CHAIN', 159, 1, F3, dsp ? INK.DIM : INK.ACC);
+    dots(0, 8, LW, INK.DIM, 2);
+    const W = 26, top = 22, h = 38;
+    FX_COLS.forEach((col, i) => {
+      const x = 2 + i * W, cx = x + 12, sel = i === c.arg.col, edit = sel && c.mode === 'edit';
+      const blink = edit && !REDUCED.matches && (t % 600) < 300;
+      if (sel) rect(x, 11, W - 2, 8, edit ? INK.ACC : INK.LIT);
+      textC(col.label, cx, 12, F3, sel ? INK.OFF : INK.DIM);
+      // track + scale
+      vline(cx, top, h, INK.DIM);
+      for (let k = 0; k <= 4; k++) hline(cx - 2, top + Math.round(k * (h - 1) / 4), k === 2 && col.kind === 'eq' ? 5 : 2, INK.DIM);
+      // fader cap at the value
+      let p;
+      const v = this.value(col);
+      if (col.kind === 'eq') p = (v + EQ_RANGE_DB) / (2 * EQ_RANGE_DB);
+      else if (col.kind === 'tape') p = v / TAPE_MAX;
+      else { const st = col.steps(); p = Math.max(0, st.indexOf(v)) / (st.length - 1); }
+      const y = top + Math.round((1 - p) * (h - 1));
+      if (col.kind === 'eq') { const y0 = top + Math.round((h - 1) / 2); vline(cx, Math.min(y, y0), Math.abs(y - y0) + 1, INK.LIT); }
+      else vline(cx, y, top + h - y, INK.LIT);
+      rect(cx - 4, y - 1, 9, 3, blink ? INK.OFF : (sel ? INK.ACC : INK.LIT));
+      textC(this.label(col), cx, top + h + 4, F3, sel ? INK.LIT : INK.DIM);
+    });
+    hline(2 + 3 * W - 2, 12, 1, INK.OFF);
+    vline(2 + 3 * W - 1, 20, 50, INK.DIM);           // EQ | tape + mix divider
+    textC(c.mode === 'edit' ? 'TURN CHANGES · PUSH DONE' : 'TURN PICK · PUSH EDIT · HOLD RESET', LW / 2, 82, F3, INK.DIM);
+    return c.mode === 'edit';
+  },
+};
+VIEWS.fx = {
+  title: 'FX',
+  items: () => FX_COLS.map(col => ({ label: col.label, value: FX.label(col) })),
+  turn: (c, dir) => {
+    if (c.mode === 'edit') return FX.step(FX_COLS[c.arg.col], dir);
+    const n = clamp(c.arg.col + dir, 0, FX_COLS.length - 1);
+    if (n === c.arg.col) return Snd.blip(420, 0.02, 0.05);
+    c.arg.col = n; commit(); Access.announce();
+  },
+  push: c => { c.mode = c.mode === 'edit' ? null : 'edit'; commit(); Access.announce(); },
+  long: c => FX.reset(FX_COLS[c.arg.col]),
 };
 
 /* ---------- 22. player: queue, transport, shuffle/repeat ---------------- */
@@ -3031,14 +3276,14 @@ const Player = {
   urls: new Map(), order: [], pos: 0, counted: false, token: 0, pendingSeek: 0, quietUntil: 0, wantPause: false, want: false,
   scanTimer: 0, scanT0: 0, lastSave: 0, retry: new Set(), bad: new Set(), errSkips: 0,
   cur() { return S.tracks[S.cur]; },
-  rebuildOrder() {
+  rebuildOrder(first = S.cur) {
     let ids = Lists.ids(S.ctx.kind, S.ctx.key);
     if (!ids.length || S.ctx.kind === 'queue') { S.ctx = { kind: 'all', key: null }; ids = Lists.ids('all'); }
     const idx = ids.map(indexOfId).filter(i => i >= 0), n = idx.length;
     if (S.shuffle && n > 1) {
       for (let i = n - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [idx[i], idx[j]] = [idx[j], idx[i]]; }
-      const k = idx.indexOf(S.cur);
-      if (k > 0) { idx.splice(k, 1); idx.unshift(S.cur); }
+      const k = idx.indexOf(first);
+      if (k > 0) { idx.splice(k, 1); idx.unshift(first); }
     }
     this.order = idx;
   },
@@ -3069,13 +3314,57 @@ const Player = {
     const n = this.neighbour(1); if (n != null && n >= 0 && S.tracks[n]) keep.add(S.tracks[n].id);
     for (const [id, u] of this.urls) if (!keep.has(id)) { URL.revokeObjectURL(u); this.urls.delete(id); }
   },
-  prefetch() {
+  /* what NEXT would play, without consuming the queue */
+  peekNext() {
     const qid = S.queue.find(id => indexOfId(id) >= 0);
-    let n = qid ? indexOfId(qid) : this.neighbour(1);
+    if (qid) return indexOfId(qid);
+    let n = this.neighbour(1);
     if (n == null && S.repeat === 1) n = this.order[0];
+    return n;
+  },
+  /* fetch the next song's URL and park it on the idle deck */
+  prefetch() {
+    const n = this.peekNext();
     const tr = n != null && n >= 0 ? S.tracks[n] : null;
-    if (tr && !this.urls.has(tr.id)) this.urlFor(tr).catch(() => {});
-    if (tr) Covers.load(tr.id);
+    if (!tr || tr === this.cur()) return;
+    const park = u => { if (this.peekNext() === n) Engine.preload(u); };
+    if (this.urls.has(tr.id)) park(this.urls.get(tr.id));
+    else this.urlFor(tr).then(park, () => {});
+    Covers.load(tr.id);
+  },
+  /* crossfade (or gapless micro-fade) into the next song before this ends */
+  tick() {
+    if (!S.playing || Engine.xfading || !Engine.isDsp() || !Engine.graph) return;
+    if (S.repeat === 2 || S.sleepUntil === 'eot' || Sleep.fading) return;
+    const a = Engine.out, d = a.duration;
+    if (!isFinite(d) || d < 4) return;
+    const left = (d - a.currentTime) / (a.playbackRate || 1);
+    const xf = S.set.xfade || 0;
+    const lead = xf > 0 ? Math.min(xf, d / 3) : GAPLESS_LEAD_S;
+    if (left > lead || left <= 0) return;
+    const n = this.peekNext();
+    if (n == null || n < 0) return;
+    const tr = S.tracks[n], url = this.urls.get(tr.id);
+    if (!url || !Engine.ready(url)) return;           // not parked yet: 'ended' takes over
+    if (S.queue.length && S.queue[0] === tr.id) Queue.take();
+    this.crossTo(n, url, xf > 0 ? lead : GAPLESS_FADE_S);
+  },
+  crossTo(i, url, dur) {
+    const tr = S.tracks[i];
+    ++this.token;
+    S.cur = i; S.t = 0; S.dur = tr.dur || 0;
+    const k = this.order.indexOf(i);
+    if (k >= 0) this.pos = k;
+    this.counted = false;
+    S.trackT0 = now();
+    this.quietUntil = now() + 300;
+    Engine.crossfade(url, dur);
+    this.loadedId = tr.id;
+    Covers.load(tr.id).then(() => { LCD.dirty = true; MS.update(); });
+    MS.update();
+    commit();
+    Access.announce();
+    setTimeout(() => { this.gc(); this.prefetch(); }, dur * 1000 + 400);
   },
   async load(i, { play = false, t = 0, fresh = false } = {}) {
     const tr = S.tracks[i];
@@ -3101,7 +3390,8 @@ const Player = {
     this.pendingSeek = t;
     this.quietUntil = now() + 600;              // src swaps fire queued pause events
     Engine.load(url);
-    if (play) this.play();
+    this.loadedId = tr.id;
+    if (play) this.start();
     else { S.playing = false; commit(); }
     this.gc();
     this.prefetch();
@@ -3109,6 +3399,9 @@ const Player = {
   play() {
     if (!S.tracks.length) { Snd.err(); toast('NO SONGS', 'PRESS 03 ADD'); return; }
     if (S.cur < 0 || !Engine.out.getAttribute('src')) return this.load(Math.max(0, S.cur), { play: true, t: S.t });
+    this.start();
+  },
+  start() {
     this.wantPause = false;
     this.want = true;
     Interrupt.pausedBySystem = false;
@@ -3135,8 +3428,7 @@ const Player = {
     S.ctx = { kind: kind || 'all', key: key == null ? null : key };
     const i = indexOfId(id);
     if (i < 0) return;
-    S.cur = i;
-    this.rebuildOrder();
+    this.rebuildOrder(i);
     savePersisted();
     this.playIndex(i);
   },
@@ -3165,7 +3457,8 @@ const Player = {
     this.setSpeed(SPEEDS[j]);
   },
   playIndex(i) {
-    if (i === S.cur && Engine.out.getAttribute('src')) { this.seek(0); this.play(); return; }
+    const tr = S.tracks[i];
+    if (tr && tr.id === this.loadedId && Engine.out.getAttribute('src')) { this.seek(0); this.play(); return; }
     this.load(i, { play: true });
   },
   next(user, forcePlay) {
@@ -3269,6 +3562,7 @@ const Player = {
         S.t = a.currentTime;
         if (!this.counted && a.currentTime >= RECENT_AFTER_S) { this.counted = true; Library.markPlayed(this.cur()); }
         Sleep.check();
+        this.tick();
         const t = now();
         if (t - this.lastSave > 4000) { this.lastSave = t; savePersisted(); }
         MS.position();
@@ -3276,12 +3570,14 @@ const Player = {
       }
       case 'play': case 'playing':
         if (!this.wantPause) S.playing = true;
+        Engine.applyFx();
         if (type === 'playing' && a.readyState >= 3) { const c = this.cur(); if (c) { this.retry.delete(c.id); this.bad.delete(c.id); } }
         Engine.sync(true);
         MS.state();
         commit();
         break;
       case 'pause':
+        Engine.applyFx();
         if (now() < this.quietUntil || a.ended) break;
         if (!this.wantPause && S.playing) Interrupt.systemPaused();
         S.playing = false;
@@ -3315,6 +3611,7 @@ const Player = {
 
 /* ---------- 23. library management --------------------------------------- */
 const RECENT_AFTER_S = 10, RECENT_MAX = 50;
+const GAPLESS_LEAD_S = 0.12, GAPLESS_FADE_S = 0.06, XFADE_TICK_MS = 100;
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const fmtBytes = n => n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : n >= 1e6 ? (n / 1e6).toFixed(1) + ' MB' : Math.round(n / 1e3) + ' KB';
 const Library = {
@@ -3460,8 +3757,7 @@ const Library = {
 };
 $('#filePick').addEventListener('change', e => Library.import(e.target.files));
 
-/* FX screen and backup are wired in later milestones */
-const FX = { open() { toast('EQ + TAPE', 'SOON', 900); }, draw() { return false; } };
+/* backup is wired in the data milestone */
 const Backup = { save() { toast('BACKUP', 'SOON', 900); }, pick() { toast('RESTORE', 'SOON', 900); } };
 
 /* ---------- 24. now playing: cover, text, visualiser, waveform scrubber --- */
@@ -3725,7 +4021,7 @@ const MS = {
 const Air = {
   supported: typeof window.WebKitPlaybackTargetAvailabilityEvent !== 'undefined',
   init() {
-    for (const a of [Engine.dsp, Engine.dir]) {
+    for (const a of Engine.elements()) {
       a.addEventListener('webkitplaybacktargetavailabilitychanged', e => {
         if (a !== Engine.out) return;
         S.wirelessAvail = e.availability === 'available';
@@ -3780,7 +4076,7 @@ const Interrupt = {
     c.addEventListener('statechange', () => {
       const st = c.state;
       if (st === 'interrupted') this.sessionInterrupted = true;
-      if (st !== 'running' && document.hidden && S.playing && Engine.out === Engine.dsp) this.ctxDropped = true;
+      if (st !== 'running' && document.hidden && S.playing && Engine.isDsp()) this.ctxDropped = true;
       if (this.lastCtx === 'interrupted' && st === 'running' && this.pausedBySystem) this.resume();
       this.lastCtx = st;
     });
@@ -3799,7 +4095,7 @@ const Interrupt = {
     }
     relayout();
     const c = Snd.ctx;
-    const dropped = this.ctxDropped || (c && c.state !== 'running' && S.playing && Engine.out === Engine.dsp);
+    const dropped = this.ctxDropped || (c && c.state !== 'running' && S.playing && Engine.isDsp());
     if (c && c.state !== 'running') c.resume().catch(() => {});
     if (dropped && S.set.out === 'dsp') {
       // this iOS build silenced Web Audio in the background: fall back to the
@@ -4023,6 +4319,7 @@ LED.sync();
 Library.load();
 wake();
 setInterval(() => { if (!document.hidden) Engine.sync(); }, 1000);
+setInterval(() => Player.tick(), XFADE_TICK_MS);
 
 /* offline shell when hosted next to sw.js (optional; fails quietly elsewhere) */
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
@@ -4032,7 +4329,7 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') {
 /* debug/test hooks (harmless in production) */
 window.__mp1 = { S, LCD, powerOn, commit, overlay, toast, render: () => { LCD.dirty = true; renderDisplay(now()); },
   step: (ms) => { for (let i = 0; i < ms / 16.67; i++) for (const a of anims) if (a(1 / 60, now()) === false) anims.delete(a); },
-  Enc, KEYS, Nav, App, Library, Player, Engine, DB, Covers, Tags, readMeta, Spec, Wave, Store, fault, OV, THEMES, Shift, Queue, Sleep, Search, Lists, VIEWS, Access, freezeBoot: ms => { bootFreeze = ms; LCD.dirty = true; } };
+  Enc, KEYS, Nav, App, Library, Player, Engine, DB, Covers, Tags, readMeta, Spec, Wave, Store, fault, OV, THEMES, Shift, Queue, Sleep, Search, Lists, VIEWS, Access, FX, freezeBoot: ms => { bootFreeze = ms; LCD.dirty = true; } };
 window.__errs = [];
 addEventListener('error', e => window.__errs.push(String(e.message)));
 </script>
