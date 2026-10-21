@@ -682,6 +682,8 @@ const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const lerp = (a, b, t) => a + (b - a) * t;
 const now = () => performance.now();
+const APP_VERSION = '2.0.0';
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)');
 
 /* ---------- 1. fit the device to the phone ------------------------------- */
 const insetProbe = document.createElement('div');
@@ -773,7 +775,8 @@ const S = {
   encMode: 0,              // 0 VOL, 1 SEEK, 2 SCRL
   hold: false,
   wireless: false, wirelessAvail: false,
-  set: { sound: true, haptics: true, bright: 4, theme: 0, out: 'dsp', edition: 'orange' },
+  set: { sound: true, haptics: true, bright: 4, theme: 0, out: 'dsp', edition: 'orange', vis: 0, speed: 1, xfade: 0 },
+  storageLow: false, sleepUntil: 0,
   shift: false,
   resumeId: null, resumeT: 0,
 };
@@ -809,6 +812,7 @@ const listeners = [];
 function commit() {
   for (const fn of listeners) fn();
   LCD.dirty = true;
+  wake();
   savePersisted();
 }
 loadPersisted();
@@ -981,9 +985,12 @@ function applyEdition() {
 }
 applyEdition();
 
-/* ---------- 8. dot-matrix display: framebuffer + primitives ------------- */
+/* ---------- 8. dot-matrix display: framebuffer + primitives -------------
+   160 × 92 dots. Every screen draws into FB with four inks:
+   0 off · 1 dim · 2 lit · 3 accent. The renderer maps inks per theme.   */
 const LW = 160, LH = 92;
-const FB = new Uint8Array(LW * LH);   // 0 off · 1 dim · 2 lit · 3 accent
+const INK = { OFF: 0, DIM: 1, LIT: 2, ACC: 3 };
+const FB = new Uint8Array(LW * LH);
 let cx0 = 0, cy0 = 0, cx1 = LW, cy1 = LH;
 const clip = (x0, y0, x1, y1) => { cx0 = Math.max(0, x0); cy0 = Math.max(0, y0); cx1 = Math.min(LW, x1); cy1 = Math.min(LH, y1); };
 const noClip = () => { cx0 = 0; cy0 = 0; cx1 = LW; cy1 = LH; };
@@ -1001,34 +1008,41 @@ const hline = (x, y, w, v) => rect(x, y, w, 1, v);
 const vline = (x, y, h, v) => rect(x, y, 1, h, v);
 function frameRect(x, y, w, h, v) { hline(x, y, w, v); hline(x, y + h - 1, w, v); vline(x, y, h, v); vline(x + w - 1, y, h, v); }
 function dots(x, y, w, v, step = 2) { for (let i = 0; i < w; i += step) px(x + i, y, v); }
-function invert(x, y, w, h) {
-  for (let j = Math.max(cy0, y); j < Math.min(cy1, y + h); j++)
-    for (let i = Math.max(cx0, x); i < Math.min(cx1, x + w); i++) {
-      const k = j * LW + i; FB[k] = FB[k] ? 0 : 2;
-    }
+function circle(cx, cy, r, v) {      // midpoint circle outline
+  let x = r, y = 0, e = 1 - r;
+  while (x >= y) {
+    px(cx + x, cy + y, v); px(cx + y, cy + x, v); px(cx - y, cy + x, v); px(cx - x, cy + y, v);
+    px(cx - x, cy - y, v); px(cx - y, cy - x, v); px(cx + y, cy - x, v); px(cx + x, cy - y, v);
+    y++;
+    if (e < 0) e += 2 * y + 1; else { x--; e += 2 * (y - x) + 1; }
+  }
 }
+/* a framed panel that owns the area under the status bar */
+function panel(x, y, w, h) { rect(0, 9, LW, LH - 9, INK.OFF); frameRect(x, y, w, h, INK.LIT); }
 
-/* fonts: 5x7 (advance 6) and 3x5 (advance 4), hand-set bitmaps ----------- */
+/* fonts: "MP1 SYS" 5×7 (advance 6) and "MP1 MICRO" 3×5 (advance 4).
+   Hand-set: square terminals, single-dot chamfers on rounds, slashed zero. */
 const F5 = { w: 5, h: 7, adv: 6, g: {} }, F3 = { w: 3, h: 5, adv: 4, g: {} };
 (function buildFonts() {
   const f5 = {
-    ' ': '00000000000000', '!': '04040404000004', '"': '0A0A0A00000000', '#': '0A0A1F0A1F0A0A',
-    '$': '040F140E051E04', '%': '18190204081303', '&': '0C12140815120D', "'": '0C040800000000',
+    ' ': '00000000000000', '!': '04040404040004', '"': '0A0A0000000000', '#': '0A0A1F0A1F0A0A',
+    '$': '040F140E051E04', '%': '19190204081313', '&': '0C12140815120D', "'": '04040000000000',
     '(': '02040808080402', ')': '08040202020408', '*': '0004150E150400', '+': '0004041F040400',
-    ',': '000000000C0408', '-': '0000001F000000', '.': '00000000000C0C', '/': '00010204081000',
-    '0': '0E11111111110E', '1': '040C040404040E', '2': '0E11010204081F', '3': '1F02040201110E',
-    '4': '02060A121F0202', '5': '1F101E0101110E', '6': '0608101E11110E', '7': '1F010204080808',
-    '8': '0E11110E11110E', '9': '0E11110F01020C', ':': '000C0C000C0C00', ';': '000C0C000C0408',
-    '<': '02040810080402', '=': '00001F001F0000', '>': '08040201020408', '?': '0E110102040004',
-    '@': '0E11010D15150E', 'A': '0E1111111F1111', 'B': '1E11111E11111E', 'C': '0E11101010110E',
-    'D': '1C12111111121C', 'E': '1F10101E10101F', 'F': '1F10101E101010', 'G': '0E11101711110F',
-    'H': '1111111F111111', 'I': '0E04040404040E', 'J': '0702020202120C', 'K': '11121418141211',
-    'L': '1010101010101F', 'M': '111B1515111111', 'N': '11111915131111', 'O': '0E11111111110E',
-    'P': '1E11111E101010', 'Q': '0E11111115120D', 'R': '1E11111E141211', 'S': '0F10100E01011E',
-    'T': '1F040404040404', 'U': '1111111111110E', 'V': '11111111110A04', 'W': '1111111515150A',
-    'X': '11110A040A1111', 'Y': '1111110A040404', 'Z': '1F01020408101F', '[': '0E08080808080E',
-    '\\': '00100804020100', ']': '0E02020202020E', '^': '040A1100000000', '_': '0000000000001F',
-    '|': '04040404040404', '·': '00000004000000', '~': '00000815020000',
+    ',': '00000000060204', '-': '0000001F000000', '.': '00000000000606', '/': '01010204081010',
+    '0': '0E11131519110E', '1': '040C040404040E', '2': '0E11010608101F',
+    '3': '0E11010601110E', '4': '02060A121F0202', '5': '1F101E0101110E', '6': '0E10101E11110E',
+    '7': '1F010204040404', '8': '0E11110E11110E', '9': '0E11110F01010E', ':': '00060600060600',
+    ';': '00060600060204', '<': '02040810080402', '=': '00001F001F0000', '>': '08040201020408',
+    '?': '0E110106040004', '@': '0E11171517100E', 'A': '0E11111F111111', 'B': '1E11111E11111E',
+    'C': '0E11101010110E', 'D': '1E11111111111E', 'E': '1F10101E10101F', 'F': '1F10101E101010',
+    'G': '0E11101711110E', 'H': '1111111F111111', 'I': '0E04040404040E', 'J': '0101010101110E',
+    'K': '11121418141211', 'L': '1010101010101F', 'M': '111B1515111111', 'N': '11191915131311',
+    'O': '0E11111111110E', 'P': '1E11111E101010', 'Q': '0E11111115120D', 'R': '1E11111E141211',
+    'S': '0E11100E01110E', 'T': '1F040404040404', 'U': '1111111111110E', 'V': '111111110A0A04',
+    'W': '11111115151B11', 'X': '11110A040A1111', 'Y': '11110A04040404', 'Z': '1F01020408101F',
+    '[': '0E08080808080E', '\\': '10100804020101', ']': '0E02020202020E', '^': '040A1100000000',
+    '_': '0000000000001F', '|': '04040404040404', '·': '00000004000000', '~': '00000815020000',
+    '×': '00110A040A1100', '…': '00000000001500',
   };
   for (const k in f5) {
     const s = f5[k], rows = new Uint8Array(7);
@@ -1044,7 +1058,8 @@ const F5 = { w: 5, h: 7, adv: 6, g: {} }, F3 = { w: 3, h: 5, adv: 4, g: {} };
     'Y': '55222', 'Z': '71247', '.': '00002', ',': '00024', ':': '02020', '-': '00700', '+': '02720',
     '/': '11244', '%': '51245', '>': '42124', '<': '12421', '(': '24442', ')': '42224', '!': '22202',
     '?': '61202', '#': '57575', '&': '25253', "'": '22000', '"': '55000', '_': '00007', '=': '07070',
-    '*': '05250', '[': '64446', ']': '32223', '·': '00200', '@': '75747', '|': '22222',
+    '*': '05250', '[': '64446', ']': '32223', '·': '00200', '@': '75747', '|': '22222', '×': '05250',
+    '…': '00005',
   };
   for (const k in f3) {
     const s = f3[k], rows = new Uint8Array(5);
@@ -1062,7 +1077,7 @@ function norm(s) {
     .toUpperCase();
 }
 const textW = (s, f = F5, sc = 1) => (s.length ? s.length * f.adv - 1 : 0) * sc;
-function text(s, x, y, f = F5, v = 2, sc = 1) {
+function text(s, x, y, f = F5, v = INK.LIT, sc = 1) {
   s = norm(s);
   let cx = x | 0;
   for (const ch of s) {
@@ -1083,22 +1098,29 @@ function text(s, x, y, f = F5, v = 2, sc = 1) {
   }
   return cx - x - sc;
 }
-const textC = (s, cxm, y, f = F5, v = 2, sc = 1) => text(s, Math.round(cxm - textW(norm(s), f, sc) / 2), y, f, v, sc);
-const textR = (s, xr, y, f = F5, v = 2) => text(s, xr - textW(norm(s), f), y, f, v);
-/* horizontally scrolling label inside [x, x+w) — returns true while moving */
-function marquee(s, x, y, w, f, v, t, speed = 22) {
+const textC = (s, cxm, y, f = F5, v = INK.LIT, sc = 1) => text(s, Math.round(cxm - textW(norm(s), f, sc) / 2), y, f, v, sc);
+const textR = (s, xr, y, f = F5, v = INK.LIT) => text(s, xr - textW(norm(s), f), y, f, v);
+const fitChars = (w, f) => Math.max(1, Math.floor((w + 1) / f.adv));
+/* long labels inside [x, x+w): scroll with a rest at the start, or — with
+   reduced motion — flip page by page without moving. True while animating. */
+const MARQUEE_SPEED = 22, MARQUEE_GAP = 24, MARQUEE_REST = 1.2, PAGE_FLIP_S = 2.6;
+function marquee(s, x, y, w, f, v, t, speed = MARQUEE_SPEED) {
   s = norm(s);
   const tw = textW(s, f);
   const ox0 = cx0, ox1 = cx1;
   clip(Math.max(x, ox0), cy0, Math.min(x + w, ox1), cy1);
   let moving = false;
   if (tw <= w) text(s, x, y, f, v);
-  else {
-    const gap = 24, period = tw + gap;
-    const hold = 1.2;                               // rest at the start
-    const cyc = period / speed + hold;
-    const ph = (t % cyc);
-    const off = ph < hold ? 0 : Math.floor((ph - hold) * speed);
+  else if (REDUCED.matches) {
+    const n = fitChars(w, f) - 1, pages = Math.ceil(s.length / n);
+    const page = Math.floor(t / PAGE_FLIP_S) % pages;
+    text(s.slice(page * n, page * n + n) + (page < pages - 1 ? '…' : ''), x, y, f, v);
+    moving = true;
+  } else {
+    const period = tw + MARQUEE_GAP;
+    const cyc = period / speed + MARQUEE_REST;
+    const ph = t % cyc;
+    const off = ph < MARQUEE_REST ? 0 : Math.floor((ph - MARQUEE_REST) * speed);
     text(s, x - off, y, f, v);
     text(s, x - off + period, y, f, v);
     moving = true;
@@ -1119,49 +1141,58 @@ const ICON = {};
     air:   ['.XXXXX.', 'X.....X', '..XXX..', '.X...X.', '.......', '...X...', '.......'],
     lock:  ['.XXX.', 'X...X', 'X...X', 'XXXXX', 'XX.XX', 'XX.XX', 'XXXXX'],
     spk:   ['...X', '..XX', 'XXXX', 'XXXX', 'XXXX', '..XX', '...X'],
-    note:  ['..XXX', '..X.X', '..X..', '..X..', 'XXX..', 'XXX..', '.....'],
+    moon:  ['..XX.', '.X...', 'X....', 'X....', 'X....', '.X...', '..XX.'],
+    heart: ['.X.X.', 'XXXXX', 'XXXXX', '.XXX.', '..X..'],
+    heartL:['.XX.XX.', 'XXXXXXX', 'XXXXXXX', '.XXXXX.', '..XXX..', '...X...'],
+    disk:  ['.XXXXX.', 'X.....X', '.XXXXX.', 'X.....X', '.XXXXX.', 'X.....X', '.XXXXX.'],
+    warn:  ['....X....', '...XXX...', '...X.X...', '..XX.XX..', '..XX.XX..', '.XXXXXXX.', '.XXX.XXX.', 'XXXXXXXXX'],
+    find:  ['.XXX...', 'X...X..', 'X...X..', 'X...X..', '.XXXX..', '.....X.', '......X'],
     arrR:  ['X..', 'XX.', 'XXX', 'XX.', 'X..'],
     arrL:  ['..X', '.XX', 'XXX', '.XX', '..X'],
-    arrU:  ['..X..', '.XXX.', 'XXXXX'],
     arrD:  ['XXXXX', '.XXX.', '..X..'],
-    plus:  ['..X..', '..X..', 'XXXXX', '..X..', '..X..'],
     ff:    ['X...X...', 'XX..XX..', 'XXX.XXX.', 'XXXXXXXX', 'XXX.XXX.', 'XX..XX..', 'X...X...'],
     rw:    ['...X...X', '..XX..XX', '.XXX.XXX', 'XXXXXXXX', '.XXX.XXX', '..XX..XX', '...X...X'],
+    shift: ['..X..', '.XXX.', 'XXXXX', '.XXX.', '.XXX.'],
   };
-  for (const k in src) {
-    const rows = src[k];
-    ICON[k] = { w: rows[0].length, h: rows.length, rows };
-  }
+  for (const k in src) ICON[k] = { w: src[k][0].length, h: src[k].length, rows: src[k] };
 })();
-function icon(name, x, y, v = 2) {
+function icon(name, x, y, v = INK.LIT, sc = 1) {
   const ic = ICON[name];
   for (let r = 0; r < ic.h; r++)
     for (let c = 0; c < ic.w; c++)
-      if (ic.rows[r][c] === 'X') px(x + c, y + r, v);
-  return ic.w;
-}
-function circle(cx, cy, r, v) {      // midpoint circle outline
-  let x = r, y = 0, e = 1 - r;
-  while (x >= y) {
-    px(cx + x, cy + y, v); px(cx + y, cy + x, v); px(cx - y, cy + x, v); px(cx - x, cy + y, v);
-    px(cx - x, cy - y, v); px(cx - y, cy - x, v); px(cx + y, cy - x, v); px(cx + x, cy - y, v);
-    y++;
-    if (e < 0) e += 2 * y + 1; else { x--; e += 2 * (y - x) + 1; }
-  }
+      if (ic.rows[r][c] === 'X') { if (sc === 1) px(x + c, y + r, v); else rect(x + c * sc, y + r * sc, sc, sc, v); }
+  return ic.w * sc;
 }
 
-/* ---------- 9. display renderer: framebuffer -> glass ------------------- */
+/* ---------- 9. display renderer: framebuffer → glass ---------------------
+   Three display technologies, each with its own optics:
+   · OLED  — emissive white dots on true black, a little bloom
+   · AMBER — transmissive LCD: amber backlight, dark dots, uneven light
+   · E-INK — reflective paper, no light, full-refresh flash between screens */
 const THEMES = [
-  // name, glass bg, unlit dot, lit, accent, glow
-  { name: 'MONO',  bg: '#0B0C0D', unlit: '#17181A', lit: [242, 238, 229], acc: [255, 90, 28],  glow: 0.42 },
-  { name: 'AMBER', bg: '#0C0A08', unlit: '#1A1410', lit: [255, 108, 34], acc: [255, 226, 205], glow: 0.5 },
-  { name: 'LCD',   bg: '#ADAEA6', unlit: '#A4A59D', lit: [30, 31, 34],   acc: [226, 70, 14],   glow: 0 },
+  { id: 'oled',  name: 'OLED',  kind: 'emissive', bg: '#030304', unlit: '#0B0C0D', lit: [244, 242, 236], acc: [255, 90, 28], dimK: .34, glow: .24, gap: .17 },
+  { id: 'amber', name: 'AMBER', kind: 'lcd',      bg: '#C46A12', unlit: '#E38C27', lit: [52, 20, 4],     acc: [118, 22, 0],  dimK: .44, glow: 0,   gap: .12 },
+  { id: 'eink',  name: 'E-INK', kind: 'eink',     bg: '#A9A8A1', unlit: '#B7B6AF', lit: [50, 50, 48],    acc: [14, 14, 14],  dimK: .46, glow: 0,   gap: .07 },
 ];
+const BRIGHT_STEPS = [0.42, 0.56, 0.7, 0.85, 1];
+const BAYER8 = (() => {                    // 8×8 ordered-dither thresholds 0..63
+  const m = [[0, 2], [3, 1]];
+  let b = m;
+  for (let n = 2; n < 8; n *= 2) {
+    const nb = [];
+    for (let y = 0; y < n * 2; y++) { nb.push([]); for (let x = 0; x < n * 2; x++) nb[y].push(4 * b[y % n][x % n] + m[(y / n) | 0][(x / n) | 0]); }
+    b = nb;
+  }
+  return Uint8Array.from(b.flat());
+})();
+const TRANS_MS = { dissolve: 170, overlay: 110, eink: 380 };
+const hexRgb = h => [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16));
 const LCD = {
-  cv: $('#lcd'), g: null, low: null, lowG: null, img: null, mask: null, P: 6,
-  dirty: true, anim: false, flickerUntil: 0, pal: null,
+  cv: $('#lcd'), g: null, low: null, lowG: null, img: null, mask: null, light: null, paper: null, P: 6,
+  dirty: true, anim: false, flickerUntil: 0, pal: null, theme: THEMES[0],
+  shown: new Uint8Array(LW * LH), prev: new Uint8Array(LW * LH), trans: null, lastKey: '',
   resize(dpr, s) {
-    // dot pitch in device pixels; canvas is sized so one dot = P device px
+    // dot pitch in device pixels; the canvas is sized so one dot = P device px
     const P = Math.max(3, Math.floor(2 * dpr * s + 0.02));
     this.P = P;
     const cv = this.cv;
@@ -1177,37 +1208,88 @@ const LCD = {
       this.img = this.lowG.createImageData(LW, LH);
     }
     this.buildMask();
-    this.dirty = true;
   },
   buildMask() {
-    const P = this.P, th = THEMES[S.set.theme] || THEMES[0];
+    const P = this.P, th = THEMES[S.set.theme] || THEMES[0], W = LW * P, H = LH * P;
+    this.theme = th;
     const m = this.mask || (this.mask = document.createElement('canvas'));
-    m.width = LW * P; m.height = LH * P;
+    m.width = W; m.height = H;
     const g = m.getContext('2d');
-    g.clearRect(0, 0, m.width, m.height);
     g.fillStyle = th.bg;
-    g.fillRect(0, 0, m.width, m.height);
-    const gap = Math.max(1, Math.round(P * 0.17));
-    for (let y = 0; y < LH; y++) for (let x = 0; x < LW; x++)
-      g.clearRect(x * P, y * P, P - gap, P - gap);
-    $('#glass').style.setProperty('--lcd-bg', th.bg);
-    $('#lcdType').textContent = th.name.toLowerCase();
+    g.fillRect(0, 0, W, H);
+    const gap = Math.max(1, Math.round(P * th.gap));
+    for (let y = 0; y < LH; y++) for (let x = 0; x < LW; x++) g.clearRect(x * P, y * P, P - gap, P - gap);
+    // LCD backlight: brighter in the middle, falling off toward the bezel
+    this.light = null;
+    if (th.kind === 'lcd') {
+      const l = this.light = document.createElement('canvas');
+      l.width = W; l.height = H;
+      const lg = l.getContext('2d');
+      const grd = lg.createRadialGradient(W * 0.42, H * 0.4, H * 0.1, W * 0.5, H * 0.5, W * 0.62);
+      grd.addColorStop(0, '#FFFFFF'); grd.addColorStop(1, '#C9A27E');
+      lg.fillStyle = grd; lg.fillRect(0, 0, W, H);
+    }
+    // e-ink: fibrous paper under the pigment
+    this.paper = null;
+    if (th.kind === 'eink') {
+      const p = this.paper = document.createElement('canvas');
+      p.width = W; p.height = H;
+      const pg = p.getContext('2d');
+      const base = hexRgb(th.unlit), im = pg.createImageData(W, H);
+      for (let i = 0; i < im.data.length; i += 4) {
+        const n = (Math.random() - 0.5) * 9;
+        im.data[i] = base[0] + n; im.data[i + 1] = base[1] + n; im.data[i + 2] = base[2] + n - 1; im.data[i + 3] = 255;
+      }
+      pg.putImageData(im, 0, 0);
+    }
+    const glass = $('#glass');
+    glass.style.setProperty('--lcd-bg', th.bg);
+    $('#lcdType').textContent = { oled: 'white oled', amber: 'amber lcd', eink: 'grey e-ink' }[th.id];
     this.palette();
   },
   palette() {
-    const th = THEMES[S.set.theme] || THEMES[0];
-    const b = [0.42, 0.56, 0.7, 0.85, 1][clamp(S.set.bright, 1, 5) - 1];
-    const lcdTheme = th.glow === 0;
-    // on the reflective LCD, "brightness" is contrast; on emissive themes it's light
-    const mix = (c, k) => lcdTheme ? c.map((v, i) => Math.round(lerp(parseInt(th.unlit.substr(1 + i * 2, 2), 16), v, k))) : c.map(v => Math.round(v * k));
+    const th = this.theme;
+    const b = BRIGHT_STEPS[clamp(S.set.bright, 1, 5) - 1];
+    const reflective = th.kind !== 'emissive';
+    const unlit = hexRgb(th.unlit);
+    // emissive: brightness is light output; LCD/e-ink: brightness is contrast
+    const mix = (c, k) => reflective ? c.map((v, i) => Math.round(lerp(unlit[i], v, k))) : c.map(v => Math.round(v * k));
     this.pal = [
       [0, 0, 0, 0],
-      [...mix(th.lit, b * (lcdTheme ? 0.42 : 0.34)), 255],
+      [...mix(th.lit, b * th.dimK), 255],
       [...mix(th.lit, b), 255],
-      [...mix(th.acc, lcdTheme ? Math.max(0.75, b) : b), 255],
+      [...mix(th.acc, reflective ? Math.max(0.8, b) : b), 255],
     ];
-    this.theme = th;
     this.dirty = true;
+  },
+  /* screen changes dissolve through an 8×8 ordered dither; e-ink flashes */
+  startTransition(t, kind) {
+    if (REDUCED.matches) return;
+    this.prev.set(this.shown);
+    const k = this.theme.kind === 'eink' ? 'eink' : kind;
+    this.trans = { t0: t, dur: TRANS_MS[k], kind: k };
+  },
+  applyTransition(t) {
+    const tr = this.trans;
+    if (!tr) return false;
+    const p = (t - tr.t0) / tr.dur;
+    if (p >= 1) { this.trans = null; return false; }
+    if (tr.kind === 'eink') {
+      if (p < 0.2) FB.fill(INK.ACC);                       // ink flash
+      else if (p < 0.38) FB.fill(INK.OFF);                 // white
+      else {                                               // settle, with ghosting of the old image
+        const gk = (1 - (p - 0.38) / 0.62) * 64;
+        for (let i = 0; i < FB.length; i++)
+          if (!FB[i] && this.prev[i] && BAYER8[((i / LW | 0) & 7) * 8 + (i % LW & 7)] < gk * 0.5) FB[i] = INK.DIM;
+      }
+      return true;
+    }
+    const th = p * 64;
+    for (let y = 0; y < LH; y++) {
+      const row = (y & 7) * 8, o = y * LW;
+      for (let x = 0; x < LW; x++) if (BAYER8[row + (x & 7)] >= th) FB[o + x] = this.prev[o + x];
+    }
+    return true;
   },
   blit(t) {
     const d = this.img.data, pal = this.pal;
@@ -1218,10 +1300,12 @@ const LCD = {
     this.lowG.putImageData(this.img, 0, 0);
     const g = this.g, W = this.cv.width, H = this.cv.height, th = this.theme;
     g.globalAlpha = 1;
-    g.fillStyle = S.power === 'off' ? th.bg : th.unlit;
-    g.fillRect(0, 0, W, H);
+    g.globalCompositeOperation = 'source-over';
+    if (S.power === 'off') { g.fillStyle = th.kind === 'emissive' ? th.bg : th.unlit; g.fillRect(0, 0, W, H); }
+    else if (this.paper) g.drawImage(this.paper, 0, 0);
+    else { g.fillStyle = th.unlit; g.fillRect(0, 0, W, H); }
     let a = 1, oy = 0;
-    if (t < this.flickerUntil) {          // track-change flicker + line jitter
+    if (t < this.flickerUntil && th.kind === 'emissive') {   // lamp-test flicker (boot only)
       a = 0.55 + Math.random() * 0.45;
       oy = Math.random() < 0.3 ? this.P : 0;
     }
@@ -1233,197 +1317,249 @@ const LCD = {
     g.imageSmoothingEnabled = false;
     g.globalAlpha = a;
     g.drawImage(this.low, 0, oy, W, H);
-    g.globalAlpha = th.glow ? 0.92 : 1;
+    g.globalAlpha = th.glow ? 0.94 : 1;
     g.drawImage(this.mask, 0, 0);
+    if (this.light && S.power !== 'off') {
+      g.globalAlpha = 1;
+      g.globalCompositeOperation = 'multiply';
+      g.drawImage(this.light, 0, 0);
+      g.globalCompositeOperation = 'source-over';
+    }
+    this.shown.set(FB);
   },
   flicker(ms = 140) { this.flickerUntil = now() + ms; },
 };
 
-/* ---------- 10. toasts / overlays --------------------------------------- */
+/* ---------- 10. overlays: designed panels that take over the screen ------ */
 const OV = { kind: null, until: 0, a: null, b: null, start: 0 };
 function overlay(kind, a, b, ms = 1100) {
   OV.kind = kind; OV.a = a; OV.b = b; OV.start = now(); OV.until = OV.start + ms;
   LCD.dirty = true;
+  wake();
 }
 function toast(a, b, ms) { overlay('toast', a, b, ms); }
+/* failures: a warning glyph, what happened, and what to do next */
+function fault(title, detail, hint, ms = 2000) { overlay('error', { title, detail, hint }, null, ms); Snd.err(); }
 
 function drawOverlay(t) {
   if (!OV.kind) return false;
   if (t > OV.until) { OV.kind = null; LCD.dirty = true; return false; }
-  rect(0, 9, LW, LH - 9, 0);                              // overlays own the screen
-  if (OV.kind === 'toast') {
-    const l1 = norm(OV.a), l2 = OV.b ? norm(OV.b) : '';
-    const w = Math.max(textW(l1, F5), textW(l2, F3)) + 14;
-    const h = l2 ? 23 : 15;
-    const x = Math.round((LW - w) / 2), y = Math.round((LH - h) / 2);
-    rect(x - 1, y - 1, w + 2, h + 2, 0);
-    frameRect(x, y, w, h, 2);
-    textC(l1, LW / 2, y + 4, F5, 2);
-    if (l2) textC(l2, LW / 2, y + 14, F3, 3);
-  } else if (OV.kind === 'hold') {
-    const x = 50, y = 22, w = 60, h = 46;
-    rect(x - 1, y - 1, w + 2, h + 2, 0);
-    frameRect(x, y, w, h, 2);
-    // big padlock, drawn at 3x
-    const ic = ICON.lock;
-    for (let r = 0; r < ic.h; r++) for (let c = 0; c < ic.w; c++)
-      if (ic.rows[r][c] === 'X') rect(x + 23 + c * 3, y + 6 + r * 3, 3, 3, 3);
-    textC(OV.a ? 'HOLD' : 'HOLD OFF', LW / 2, y + 33, F5, 2);
-  } else if (OV.kind === 'vol') {
-    const x = 30, y = 22, w = 100, h = 48;
-    rect(x - 1, y - 1, w + 2, h + 2, 0);
-    frameRect(x, y, w, h, 2);
-    icon('spk', x + 5, y + 5, 2);
-    for (let i = 0; i < 3; i++) if (S.vol > i * 0.33) vline(x + 11 + i * 2, y + 7 - i, 3 + i * 2, 2);
-    text('VOL', x + 19, y + 6, F3, 2);
-    textR(S.set.out === 'dsp' ? 'DSP' : 'DIRECT', x + w - 5, y + 6, F3, 1);
-    if (!Engine.volumeWorks()) {
-      textC('USE SIDE KEYS', LW / 2, y + 19, F5, 2);
-      textC('OR SET OUT: DSP', LW / 2, y + 33, F3, 3);
-      return true;
+  const age = (t - OV.start) / 1000;
+  switch (OV.kind) {
+    case 'toast': {
+      const l1 = norm(OV.a), l2 = OV.b ? norm(OV.b) : '';
+      const w = Math.max(textW(l1, F5), textW(l2, F3)) + 16;
+      const h = l2 ? 25 : 17;
+      panel(Math.round((LW - w) / 2), Math.round(9 + (LH - 9 - h) / 2), w, h);
+      const y = Math.round(9 + (LH - 9 - h) / 2);
+      textC(l1, LW / 2, y + 5, F5, INK.LIT);
+      if (l2) textC(l2, LW / 2, y + 15, F3, INK.ACC);
+      break;
     }
-    textC(String(Math.round(S.vol * 100)), LW / 2, y + 15, F5, 2, 2);
-    const segs = 22, n = Math.round(S.vol * segs);
-    for (let i = 0; i < segs; i++) {
-      const sx = x + 6 + i * 4;
-      if (i < n) rect(sx, y + 37, 3, 6, i === n - 1 ? 3 : 2); else rect(sx, y + 42, 3, 1, 1);
+    case 'error': {
+      const e = OV.a;
+      panel(8, 16, 144, 60);
+      icon('warn', 16, 25, INK.ACC);
+      text(e.title, 32, 25, F5, INK.LIT);
+      if (e.detail) marquee(e.detail, 32, 36, 114, F3, INK.LIT, age, 20);
+      if (e.hint) marquee(e.hint, 32, 45, 114, F3, INK.DIM, age, 20);
+      dots(16, 56, 128, INK.DIM, 2);
+      textC('PUSH 10 ENC TO DISMISS', LW / 2, 62, F3, INK.DIM);
+      break;
     }
-  } else if (OV.kind === 'mode') {
-    const x = 22, y = 26, w = 116, h = 38;
-    rect(x - 1, y - 1, w + 2, h + 2, 0);
-    frameRect(x, y, w, h, 2);
-    textC('ENCODER MODE', LW / 2, y + 5, F3, 1);
-    ['VOL', 'SEEK', 'SCRL'].forEach((m, i) => {
-      const bx = x + 6 + i * 36, sel = i === S.encMode;
-      if (sel) rect(bx, y + 16, 32, 13, 2); else frameRect(bx, y + 16, 32, 13, 1);
-      textC(m, bx + 16, y + 19, F5, sel ? 0 : 1);
-    });
-  } else if (OV.kind === 'add') {
-    const a = OV.a;
-    text('ADDING', 6, 15, F5, 2);
-    textR(`${two(a.k + 1)}/${two(a.n)}`, 154, 15, F5, 3);
-    marquee(a.name, 6, 29, 148, F3, 1, (t - OV.start) / 1000, 26);
-    frameRect(6, 41, 148, 7, 2);
-    rect(8, 43, Math.round(144 * (a.k + 0.5) / a.n), 3, 2);
-    const dotsN = Math.floor(t / 300) % 4;
-    textC('WRITING TO STORAGE' + '.'.repeat(dotsN), 80, 58, F3, 1);
-  } else if (OV.kind === 'air') {
-    const age = (t - OV.start) / 1000;
-    clip(0, 10, LW, 62);
-    if (OV.a) for (let k = 0; k < 3; k++) {          // rings radiate from the icon
-      const r = 16 + (age * 26 + k * 9) % 27;
-      circle(80, 37, Math.round(r), r > 34 ? 1 : 2);
+    case 'storage': {
+      const u = OV.a;
+      panel(8, 14, 144, 66);
+      icon('disk', 16, 22, INK.ACC);
+      text('STORAGE LOW', 28, 22, F5, INK.LIT);
+      const p = clamp(u.ratio || 0, 0, 1), bw = 128, n = Math.round(bw / 4 * p);
+      for (let i = 0; i < bw / 4; i++) rect(16 + i * 4, 35, 3, 6, i < n ? (i >= bw / 4 * 0.9 ? INK.ACC : INK.LIT) : INK.DIM);
+      text(`${Math.round(p * 100)}% USED`, 16, 45, F3, INK.LIT);
+      textR(`${u.free} FREE`, 144, 45, F3, INK.LIT);
+      text('REMOVE SONGS TO ADD MORE', 16, 56, F3, INK.DIM);
+      text('MENU > LIBRARY > HOLD 10', 16, 64, F3, INK.DIM);
+      break;
     }
-    noClip();
-    const ic = ICON.air;
-    for (let r = 0; r < ic.h; r++) for (let c = 0; c < ic.w; c++)
-      if (ic.rows[r][c] === 'X') rect(70 + c * 3, 27 + r * 3, 3, 3, OV.a ? 3 : 1);
-    if (!OV.a) for (let i = 0; i < 22; i++) rect(69 + i, 48 - i, 2, 1, 2);
-    textC(OV.a ? 'WIRELESS ON' : 'WIRELESS OFF', 80, 66, F5, 2);
-    textC(OV.a ? 'AIRPLAY ROUTE ACTIVE' : 'BACK ON DEVICE', 80, 77, F3, 1);
-  } else if (OV.kind === 'seek') {
-    const x = 18, y = 28, w = 124, h = 34;
-    rect(x - 1, y - 1, w + 2, h + 2, 0);
-    frameRect(x, y, w, h, 2);
-    icon(OV.a < 0 ? 'rw' : 'ff', x + 6, y + 6, 3);
-    const tt = fmtTime(S.t) + ' / ' + fmtTime(S.dur);
-    textR(tt, x + w - 6, y + 6, F5, 2);
-    const bw = w - 12, p = S.dur ? clamp(S.t / S.dur, 0, 1) : 0;
-    hline(x + 6, y + 23, bw, 1);
-    rect(x + 6, y + 22, Math.round(bw * p), 3, 2);
-    rect(x + 6 + Math.round(bw * p) - 1, y + 20, 3, 7, 3);
+    case 'hold': {
+      panel(36, 16, 88, 60);
+      icon('lock', 66, 22, INK.ACC, 4);
+      textC(OV.a ? 'HOLD' : 'HOLD OFF', LW / 2, 54, F5, INK.LIT);
+      textC(OV.a ? 'SLIDE TO UNLOCK' : 'CONTROLS ACTIVE', LW / 2, 65, F3, INK.DIM);
+      break;
+    }
+    case 'vol': {
+      panel(30, 18, 100, 54);
+      icon('spk', 36, 24, INK.LIT);
+      for (let i = 0; i < 3; i++) if (S.vol > i * 0.33) vline(42 + i * 2, 26 - i, 3 + i * 2, INK.LIT);
+      text('VOL', 50, 25, F3, INK.LIT);
+      textR(S.set.out === 'dsp' ? 'DSP' : 'DIRECT', 124, 25, F3, INK.DIM);
+      if (!Engine.volumeWorks()) {
+        textC('USE SIDE KEYS', LW / 2, 38, F5, INK.LIT);
+        textC('OR SET OUT: DSP', LW / 2, 52, F3, INK.ACC);
+        break;
+      }
+      textC(String(Math.round(S.vol * 100)), LW / 2, 33, F5, INK.LIT, 2);
+      const segs = 22, n = Math.round(S.vol * segs);
+      for (let i = 0; i < segs; i++) {
+        const sx = 36 + i * 4;
+        if (i < n) rect(sx, 57, 3, 7, i === n - 1 ? INK.ACC : INK.LIT); else rect(sx, 63, 3, 1, INK.DIM);
+      }
+      break;
+    }
+    case 'mode': {
+      panel(14, 22, 132, 46);
+      textC('ENCODER MODE', LW / 2, 28, F3, INK.DIM);
+      ['VOL', 'SEEK', 'SCRL'].forEach((m, i) => {
+        const bx = 20 + i * 41, sel = i === S.encMode;
+        if (sel) rect(bx, 40, 38, 15, INK.LIT); else frameRect(bx, 40, 38, 15, INK.DIM);
+        textC(m, bx + 19, 44, F5, sel ? INK.OFF : INK.DIM);
+      });
+      textC('HOLD 10 ENC TO CHANGE', LW / 2, 59, F3, INK.DIM);
+      break;
+    }
+    case 'seek': {
+      panel(14, 24, 132, 40);
+      icon(OV.a < 0 ? 'rw' : 'ff', 22, 31, INK.ACC);
+      textR(fmtTime(S.t) + ' / ' + fmtTime(S.dur), 138, 31, F5, INK.LIT);
+      const bw = 116, p = S.dur ? clamp(S.t / S.dur, 0, 1) : 0;
+      drawScrubber(22, 48, bw, p, Wave.get(Player.cur()), 3);
+      break;
+    }
+    case 'add': {
+      const a = OV.a;
+      panel(6, 12, 148, 70);
+      text('ADDING', 14, 19, F5, INK.LIT);
+      textR(`${a.k + 1} / ${a.n}`, 146, 19, F5, INK.ACC);
+      marquee(a.name, 14, 31, 132, F3, INK.LIT, age, 26);
+      frameRect(14, 41, 132, 9, INK.LIT);
+      const done = (a.k + (a.part || 0)) / a.n;
+      rect(16, 43, Math.round(128 * done), 5, INK.LIT);
+      if (a.big) {                                          // big file: show that writing is alive
+        const sweep = (t / 12) % 128;
+        rect(16 + Math.round(sweep), 43, 6, 5, INK.ACC);
+      }
+      text(a.size || '', 14, 55, F3, INK.DIM);
+      textR(`${a.added || 0} OK · ${a.skipped || 0} SKIP`, 146, 55, F3, INK.DIM);
+      textC('WRITING TO STORAGE' + '.'.repeat(Math.floor(t / 300) % 4), LW / 2, 68, F3, INK.DIM);
+      break;
+    }
+    case 'air': {
+      rect(0, 9, LW, LH - 9, INK.OFF);
+      clip(0, 10, LW, 62);
+      if (OV.a) for (let k = 0; k < 3; k++) {          // rings radiate from the icon
+        const r = 16 + (age * 26 + k * 9) % 27;
+        circle(80, 37, Math.round(r), r > 34 ? INK.DIM : INK.LIT);
+      }
+      noClip();
+      icon('air', 70, 27, OV.a ? INK.ACC : INK.DIM, 3);
+      if (!OV.a) for (let i = 0; i < 22; i++) rect(69 + i, 48 - i, 2, 1, INK.LIT);
+      textC(OV.a ? 'WIRELESS ON' : 'WIRELESS OFF', LW / 2, 66, F5, INK.LIT);
+      textC(OV.a ? 'AIRPLAY ROUTE ACTIVE' : 'BACK ON DEVICE', LW / 2, 77, F3, INK.DIM);
+      break;
+    }
   }
   return true;
 }
 
-/* ---------- 11. screens -------------------------------------------------- */
+/* ---------- 11. screens --------------------------------------------------- */
 const fmtTime = s => {
   s = Math.max(0, Math.floor(s || 0));
-  const m = Math.floor(s / 60), r = s % 60;
-  return (m < 10 ? '0' : '') + m + ':' + (r < 10 ? '0' : '') + r;
+  const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, r = s % 60;
+  return (h ? h + ':' + (m < 10 ? '0' : '') : (m < 10 ? '0' : '')) + m + ':' + (r < 10 ? '0' : '') + r;
 };
 const two = n => (n < 10 ? '0' : '') + n;
 
 function statusBar(t, title) {
-  // left: transport state + track counter (or a screen title)
-  if (title) {
-    text(title, 0, 1, F3, 2);
-  } else {
-    icon(S.playing ? 'play' : (S.cur >= 0 ? 'pause' : 'stop'), 0, 0, S.playing ? 3 : 2);
+  // left: transport state + track counter, or a screen title
+  if (title) text(title, 0, 1, F3, INK.LIT);
+  else {
+    icon(S.playing ? 'play' : (S.cur >= 0 ? 'pause' : 'stop'), 0, 0, S.playing ? INK.ACC : INK.LIT);
     const n = S.tracks.length;
-    text(n ? `${S.cur >= 0 ? two(S.cur + 1) : '--'}/${two(n)}` : '--/--', 9, 1, F3, 2);
+    text(n ? `${S.cur >= 0 ? two(S.cur + 1) : '--'}/${two(n)}` : '--/--', 9, 1, F3, INK.LIT);
   }
-  // middle: encoder mode tag (inverted chip) or HOLD
-  if (S.hold) {
-    icon('lock', 66, 0, 3); text('HOLD', 73, 1, F3, 3);
+  // middle chip: SHIFT > HOLD > encoder mode
+  if (S.shift) {
+    const w = textW('SHIFT', F3) + 10, x = 80 - Math.round(w / 2);
+    rect(x, 0, w, 7, INK.ACC); icon('shift', x + 2, 1, INK.OFF); text('SHIFT', x + 8, 1, F3, INK.OFF);
+  } else if (S.hold) {
+    icon('lock', 66, 0, INK.ACC); text('HOLD', 73, 1, F3, INK.ACC);
   } else if (!title) {
-    const tag = ['VOL', 'SEEK', 'SCRL'][S.encMode];
+    const tag = (S.set.speed || 1) !== 1 ? (S.set.speed + '×').replace('0.', '.') : ['VOL', 'SEEK', 'SCRL'][S.encMode];
     const w = textW(tag, F3) + 4, x = 80 - Math.round(w / 2);
-    rect(x, 0, w, 7, 2); text(tag, x + 2, 1, F3, 0);
+    rect(x, 0, w, 7, INK.LIT); text(tag, x + 2, 1, F3, INK.OFF);
   }
-  // right: shuffle · repeat · wireless (dim when off)
-  icon('shuf', 128, 0, S.shuffle ? 2 : 1);
-  icon('rpt', 138, 0, S.repeat ? 2 : 1);
-  if (S.repeat === 2) text('1', 146, 2, F3, 3);
-  icon('air', 153, 0, S.wireless ? 3 : 1);
-  dots(0, 8, LW, 1, 2);
+  // right, from the edge inward: wireless · repeat · shuffle · sleep · fav · storage
+  icon('air', 153, 0, S.wireless ? INK.ACC : INK.DIM);
+  icon('rpt', 144, 0, S.repeat ? INK.LIT : INK.DIM);
+  if (S.repeat === 2) text('1', 152, 3, F3, INK.ACC);
+  icon('shuf', 135, 0, S.shuffle ? INK.LIT : INK.DIM);
+  let x = 128;
+  if (S.sleepUntil) { x -= 6; icon('moon', x, 0, INK.ACC); }
+  const cur = S.tracks[S.cur];
+  if (cur && cur.fav) { x -= 7; icon('heart', x, 1, INK.ACC); }
+  if (S.storageLow && (t % 1400) < 900) { x -= 9; icon('disk', x, 0, INK.ACC); }
+  dots(0, 8, LW, INK.DIM, 2);
 }
 
-/* standby: glass dark, a single dim prompt */
+/* standby: the glass is dark, one dim prompt */
 function drawStandby(t) {
-  const blinkOn = (t % 1600) < 1000;
-  textC('TOUCH TO POWER ON', LW / 2, 43, F3, blinkOn ? 1 : 0);
-  return true;
+  const blinkOn = REDUCED.matches || (t % 1600) < 1000;
+  textC('TOUCH TO POWER ON', LW / 2, 43, F3, blinkOn ? INK.DIM : INK.OFF);
+  return !REDUCED.matches;
 }
 
-/* boot sequence — returns false when finished */
-const BOOT_MS = 2300;
+/* boot: lamp test → pixel sweep → logo (blinks twice) → edition → library */
+const BOOT_MS = 2300, BOOT_MS_CALM = 900;
 let bootStart = 0, bootFreeze = null;
 function drawBoot(t) {
   const b = bootFreeze != null ? bootFreeze : t - bootStart;
-  if (b < 90) { rect(0, 0, LW, LH, 2); return true; }                 // lamp test
+  if (REDUCED.matches) {                                    // calm boot: logo + bar, no flashing
+    textC('MP-1', LW / 2, 18, F5, INK.LIT, 4);
+    const p = clamp(b / BOOT_MS_CALM, 0, 1);
+    frameRect(40, 66, 80, 5, INK.DIM); rect(41, 67, Math.round(78 * p), 3, INK.LIT);
+    return b < BOOT_MS_CALM;
+  }
+  if (b < 90) { rect(0, 0, LW, LH, INK.LIT); return true; }
   if (b < 200) return true;
-  if (b < 720) {                                                        // pixel sweep
+  if (b < 720) {
     const x = Math.floor((b - 200) / 520 * (LW + 8));
     for (let y = 0; y < LH; y++) for (let i = 0; i < Math.min(x, LW); i++)
-      if (((i + y) & 1) === 0 && ((i * 7 + y * 13) % 11) > (x - i) / 8) px(i, y, 1);
-    rect(x, 0, 3, LH, 3);
+      if (((i + y) & 1) === 0 && ((i * 7 + y * 13) % 11) > (x - i) / 8) px(i, y, INK.DIM);
+    rect(x, 0, 3, LH, INK.ACC);
     return true;
   }
   if (b < 840) return true;
-  // logo with blink, then tagline + progress
   const blinkOff = (b > 1040 && b < 1120) || (b > 1240 && b < 1300);
-  if (!blinkOff) textC('MP-1', LW / 2, 18, F5, 2, 4);
-  if (b > 1300) textC('PORTABLE AUDIO PLAYER', LW / 2, 54, F3, 1);
+  if (!blinkOff) textC('MP-1', LW / 2, 14, F5, INK.LIT, 4);
+  if (b > 1300) textC(`${S.set.edition} EDITION`, LW / 2, 50, F3, INK.ACC);
   if (b > 1420) {
     const p = clamp((b - 1420) / 620, 0, 1);
-    frameRect(40, 66, 80, 5, 1);
-    rect(41, 67, Math.round(78 * p), 3, 2);
-    textC(p < 1 ? 'LOADING LIBRARY' : (S.tracks.length ? `${S.tracks.length} SONGS` : 'READY'), LW / 2, 76, F3, p < 1 ? 1 : 3);
+    frameRect(40, 62, 80, 5, INK.DIM);
+    rect(41, 63, Math.round(78 * p), 3, INK.LIT);
+    textC(p < 1 ? 'LOADING LIBRARY' : (S.tracks.length ? `${S.tracks.length} SONGS` : 'READY'), LW / 2, 72, F3, p < 1 ? INK.DIM : INK.ACC);
+    textC(`FW ${APP_VERSION}`, LW / 2, 82, F3, INK.DIM);
   }
-  if (b > 2120) {                                                       // blinds out
+  if (b > 2120) {                                           // blinds out
     const k = Math.floor((b - 2120) / 180 * 8);
-    for (let y = 0; y < LH; y++) if ((y % 8) < k) hline(0, y, LW, 0);
+    for (let y = 0; y < LH; y++) if ((y % 8) < k) hline(0, y, LW, INK.OFF);
   }
   return b < BOOT_MS;
 }
 
-/* empty library: friendly prompt */
+/* empty library: friendly prompt pointing at 03 ADD */
 function drawEmpty(t) {
   statusBar(t);
-  // dotted cassette-ish slot with a plus, blinking softly
-  const on = (t % 1400) < 900;
-  frameRect(58, 16, 44, 30, 1);
-  for (let i = 0; i < 44; i += 2) { px(58 + i, 16, 2); px(58 + i, 45, 2); }
-  for (let i = 0; i < 30; i += 2) { px(58, 16 + i, 2); px(101, 16 + i, 2); }
-  if (on) { rect(79, 23, 2, 16, 3); rect(72, 30, 16, 2, 3); }
-  textC('NO SONGS', LW / 2, 54, F5, 2);
-  const s1 = 'PRESS ', s2 = '02 ADD';
+  const on = REDUCED.matches || (t % 1400) < 900;
+  for (let i = 0; i < 44; i += 2) { px(58 + i, 16, INK.LIT); px(58 + i, 45, INK.LIT); }
+  for (let i = 0; i < 30; i += 2) { px(58, 16 + i, INK.LIT); px(101, 16 + i, INK.LIT); }
+  if (on) { rect(79, 23, 2, 16, INK.ACC); rect(72, 30, 16, 2, INK.ACC); }
+  textC('NO SONGS', LW / 2, 54, F5, INK.LIT);
+  const s1 = 'PRESS ', s2 = '03 ADD';
   const w = textW(s1 + s2, F3), x = Math.round((LW - w) / 2);
-  text(s1, x, 66, F3, 1);
-  text(s2, x + textW(s1, F3) + 1, 66, F3, 3);
-  icon('arrD', 77, 76, on ? 3 : 1);
-  return true;
+  text(s1, x, 66, F3, INK.DIM);
+  text(s2, x + textW(s1, F3) + 1, 66, F3, INK.ACC);
+  icon('arrD', 77, 76, on ? INK.ACC : INK.DIM);
+  return !REDUCED.matches;
 }
 
 /* ---------- 12. physics -------------------------------------------------- */
@@ -1473,7 +1609,7 @@ class Key {
     try { this.el.setPointerCapture(e.pointerId); } catch (_) { /* synthetic pointer */ }
     Object.assign(this.sp, KEY_PRESS); this.sp.target = 1;
     this.sp.step(1 / 120); this.render();    // respond in this very frame
-    anims.add(this.stepper);
+    animate(this.stepper);
     Snd.keyDown(this.name === 'play');
     Hap.tap();
     this.longFired = false;
@@ -1486,7 +1622,7 @@ class Key {
     this.pid = null;
     clearTimeout(this.holdTimer);
     Object.assign(this.sp, KEY_RELEASE); this.sp.target = 0;
-    anims.add(this.stepper);
+    animate(this.stepper);
     Snd.keyUp();
     App.keyUp(this.name, cancelled, this.longFired);
   }
@@ -1526,7 +1662,7 @@ const Enc = {
     this.moved = false; this.longFired = false; this.omega = 0;
     this.rest = Math.round(this.angle / this.STEP) * this.STEP;
     this.press.target = 0.45;                // finger resting on the knob
-    anims.add(this.stepper);
+    animate(this.stepper);
     clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       if (this.moved || this.pid == null) return;
@@ -1581,7 +1717,7 @@ const Enc = {
     if (t - this.lastT > 90) this.omega = 0;       // finger stopped before lifting
     this.omega = clamp(this.omega, -40, 40);
     if (S.hold) this.omega = 0;
-    anims.add(this.stepper);
+    animate(this.stepper);
   },
   setAngle(a) {
     this.angle = a;
@@ -1676,14 +1812,14 @@ class Switch {
       const was = this.get();
       const next = this.dragged ? this.sp.x > 0.5 : (cancel ? was : !was);
       this.sp.target = next ? 1 : 0;
-      anims.add(this.stepper);
+      animate(this.stepper);
       if (next !== was) { Snd.thunk(); Hap.tap(); this.set(next); }
     };
     el.addEventListener('pointerup', e => end(e, false));
     el.addEventListener('pointercancel', e => end(e, true));
     this.render();
   }
-  sync() { this.sp.target = this.get() ? 1 : 0; anims.add(this.stepper); }
+  sync() { this.sp.target = this.get() ? 1 : 0; animate(this.stepper); }
   render() {
     const x = this.sp.x;
     this.thumb.style.transform = `translate3d(${(x * 17).toFixed(2)}px,0,0)`;
@@ -1712,7 +1848,6 @@ const Nav = {
   open(id, opts = {}) {
     this.stack.push({ id, sel: opts.sel || 0, top: 0, arg: opts.arg, mode: null, selT: now() });
     S.screen = 'list';
-    LCD.flicker(70);
     commit();
   },
   back() {
@@ -1720,10 +1855,9 @@ const Nav = {
     if (c && c.mode === 'move') return Library.drop(c);
     this.stack.pop();
     if (!this.stack.length) S.screen = homeScreen();
-    LCD.flicker(60);
     commit();
   },
-  home() { this.stack = []; S.screen = homeScreen(); LCD.flicker(70); commit(); },
+  home() { this.stack = []; S.screen = homeScreen(); commit(); },
   items() { const c = this.top(); return c ? MENUS[c.id].items(c) : []; },
   move(dir) {
     const c = this.top(), items = this.items();
@@ -1754,7 +1888,7 @@ const MENUS = {
       { label: 'NOW PLAYING', act: () => Nav.home() },
       { label: 'LIBRARY', value: two(S.tracks.length), act: () => {
         if (S.tracks.length) Nav.open('lib', { sel: Math.max(0, S.cur) });
-        else toast('NO SONGS', 'PRESS 02 ADD');
+        else toast('NO SONGS', 'PRESS 03 ADD');
       } },
       { label: 'ADD SONGS', act: () => Library.pick() },
       { label: 'SETTINGS', act: () => Nav.open('settings') },
@@ -1768,7 +1902,8 @@ const MENUS = {
       { label: 'HAPTICS', value: Hap.supported ? onOff(S.set.haptics) : 'N/A', act: () => { S.set.haptics = !S.set.haptics; Hap.tap(); } },
       { label: 'BRIGHTNESS', value: '#'.repeat(S.set.bright) + '.'.repeat(5 - S.set.bright), bar: S.set.bright,
         act: () => { S.set.bright = S.set.bright % 5 + 1; LCD.palette(); } },
-      { label: 'DISPLAY', value: THEMES[S.set.theme].name, act: () => { S.set.theme = (S.set.theme + 1) % THEMES.length; LCD.buildMask(); LCD.flicker(160); } },
+      { label: 'DISPLAY', value: THEMES[S.set.theme].name, act: () => { S.set.theme = (S.set.theme + 1) % THEMES.length; LCD.buildMask(); } },
+      { label: 'VISUALISER', value: ['SPECTRUM', 'SCOPE'][S.set.vis || 0], act: () => { S.set.vis = (S.set.vis + 1) % 2; } },
       { label: 'AUDIO OUT', value: S.set.out === 'dsp' ? 'DSP' : 'DIRECT', act: () => Engine.setOut(S.set.out === 'dsp' ? 'direct' : 'dsp') },
       { label: 'ENCODER', value: ['VOL', 'SEEK', 'SCRL'][S.encMode], act: () => { S.encMode = (S.encMode + 1) % 3; } },
       { label: 'EDITION', value: S.set.edition.toUpperCase(), act: () => { S.set.edition = EDITIONS[(EDITIONS.indexOf(S.set.edition) + 1) % EDITIONS.length]; } },
@@ -1915,12 +2050,13 @@ const App = {
     if (mode === 0) return Player.nudgeVolume(dir);
     if (mode === 1) return Player.nudgeSeek(dir, rate);
     // SCRL: jump into the library at the current song and keep scrolling
-    if (!S.tracks.length) return toast('NO SONGS', 'PRESS 02 ADD');
+    if (!S.tracks.length) return toast('NO SONGS', 'PRESS 03 ADD');
     Nav.open('lib', { sel: Math.max(0, S.cur) });
     Nav.move(dir);
   },
   encPress() {
     if (!this.ready() || this.locked()) return;
+    if (OV.kind === 'error' || OV.kind === 'storage') { OV.kind = null; LCD.dirty = true; return; }
     if (S.screen === 'list') return Nav.select();
     if (S.screen === 'empty') return Library.pick();
     Player.toggle();
@@ -1935,6 +2071,28 @@ const App = {
 };
 
 /* ---------- 18. storage: IndexedDB (songs survive reloads + offline) ---- */
+/* schema history — never edit a shipped step, only append a new one */
+const DB_NAME = 'mp1-library', DB_VERSION = 2;
+const MIGRATIONS = [
+  null,
+  // v1 (1.x): song metadata, audio blobs, embedded cover art
+  db => {
+    db.createObjectStore('tracks', { keyPath: 'id' });
+    db.createObjectStore('blobs');
+    db.createObjectStore('covers');
+  },
+  // v2 (2.0): waveform cache + key/value store; songs gain fav/plays/last
+  (db, tx) => {
+    db.createObjectStore('waves');
+    db.createObjectStore('kv');
+    tx.objectStore('tracks').openCursor().onsuccess = ev => {
+      const c = ev.target.result;
+      if (!c) return;
+      c.update(Object.assign({ fav: false, plays: 0, last: 0 }, c.value));
+      c.continue();
+    };
+  },
+];
 const isQuota = e => !!e && (e.name === 'QuotaExceededError' || e.code === 22 || /quota|space/i.test(e.message || ''));
 const DB = {
   p: null,
@@ -1942,11 +2100,10 @@ const DB = {
     if (this.p) return this.p;
     this.p = new Promise((res, rej) => {
       let req;
-      try { req = indexedDB.open('mp1-library', 1); } catch (e) { rej(e); return; }
-      req.onupgradeneeded = () => {
-        const db = req.result;
-        for (const s of ['tracks', 'blobs', 'covers'])
-          if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, s === 'tracks' ? { keyPath: 'id' } : undefined);
+      try { req = indexedDB.open(DB_NAME, DB_VERSION); } catch (e) { rej(e); return; }
+      req.onupgradeneeded = e => {
+        // run every step between the stored version and this build, in order
+        for (let v = (e.oldVersion || 0) + 1; v <= DB_VERSION; v++) MIGRATIONS[v](req.result, req.transaction);
       };
       req.onsuccess = () => { const db = req.result; db.onversionchange = () => db.close(); res(db); };
       req.onerror = () => rej(req.error);
@@ -1994,8 +2151,15 @@ const DB = {
       list.forEach((tr, i) => { tr.order = i; s.put(tr); });
     });
   },
-  remove(id) { return this.tx(['tracks', 'blobs', 'covers'], 'readwrite', t => ['tracks', 'blobs', 'covers'].forEach(s => t.objectStore(s).delete(id))); },
-  clear() { return this.tx(['tracks', 'blobs', 'covers'], 'readwrite', t => ['tracks', 'blobs', 'covers'].forEach(s => t.objectStore(s).clear())); },
+  remove(id) { return this.tx(['tracks', 'blobs', 'covers', 'waves'], 'readwrite', t => ['tracks', 'blobs', 'covers', 'waves'].forEach(s => t.objectStore(s).delete(id))); },
+  clear() { return this.tx(['tracks', 'blobs', 'covers', 'waves'], 'readwrite', t => ['tracks', 'blobs', 'covers', 'waves'].forEach(s => t.objectStore(s).clear())); },
+};
+/* small typed helpers on top of DB; failures degrade to "not cached" */
+const Store = {
+  getWave: id => DB.get('waves', id).then(v => (v instanceof Uint8Array ? v : null), () => null),
+  putWave: (id, w) => DB.tx(['waves'], 'readwrite', t => t.objectStore('waves').put(w, id)).catch(() => {}),
+  kvGet: key => DB.get('kv', key).catch(() => undefined),
+  kvSet: (key, v) => DB.tx(['kv'], 'readwrite', t => t.objectStore('kv').put(v, key)).catch(() => {}),
 };
 
 /* ---------- 19. tag reader: ID3v2.2/2.3/2.4, ID3v1, MPEG frame header ---- */
@@ -2438,7 +2602,6 @@ const Player = {
     const tok = ++this.token;
     S.cur = i; S.t = t; S.dur = tr.dur || 0;
     S.trackT0 = now();
-    LCD.flicker(170);
     commit();
     Covers.load(tr.id).then(() => { LCD.dirty = true; MS.update(); });
     MS.update();
@@ -2460,7 +2623,7 @@ const Player = {
     this.prefetch();
   },
   play() {
-    if (!S.tracks.length) { Snd.err(); toast('NO SONGS', 'PRESS 02 ADD'); return; }
+    if (!S.tracks.length) { Snd.err(); toast('NO SONGS', 'PRESS 03 ADD'); return; }
     if (S.cur < 0 || !Engine.out.getAttribute('src')) return this.load(Math.max(0, S.cur), { play: true, t: S.t });
     this.wantPause = false;
     this.want = true;
@@ -2559,8 +2722,7 @@ const Player = {
     this.want = false;
     Engine.pause();
     S.playing = false; commit();
-    toast("CAN'T PLAY", why || tr.title, 1600);
-    Snd.err();
+    fault("CAN'T PLAY", `${why || 'UNREADABLE'} · ${tr.title}`, 'SKIPPING TO NEXT SONG', 1600);
     if (S.tracks.every(t => this.bad.has(t.id))) return;   // nothing playable left
     setTimeout(() => { if (this.cur() === tr) { this.wantPause = false; this.next(true, true); } }, 1300);
   },
@@ -2778,7 +2940,68 @@ MENUS.song = {
   },
 };
 
-/* ---------- 24. now-playing screen + spectrum ----------------------------- */
+/* ---------- 24. now playing: cover, text, visualiser, waveform scrubber --- */
+
+/* waveform overview: decoded once at 8 kHz (≈ 1/5 of the memory of a full
+   decode), reduced to 160 peaks and cached. Big files fall back to a bar.  */
+const WAVE_COLS = 160, WAVE_RATE = 8000, WAVE_MAX_BYTES = 40 * 1024 * 1024;
+const Wave = {
+  cache: new Map(),            // id -> Uint8Array(160) | null (not available)
+  pending: null,
+  get(tr) { return tr ? this.cache.get(tr.id) || null : null; },
+  busy(tr) { return !!tr && this.pending === tr.id; },
+  request(tr) {
+    if (!tr || this.cache.has(tr.id) || this.pending) return;
+    if (tr.size > WAVE_MAX_BYTES) { this.cache.set(tr.id, null); return; }
+    this.pending = tr.id;
+    this.compute(tr).then(w => this.cache.set(tr.id, w), () => this.cache.set(tr.id, null))
+      .finally(() => { this.pending = null; LCD.dirty = true; wake(); });
+  },
+  async compute(tr) {
+    const stored = await Store.getWave(tr.id);
+    if (stored) return stored;
+    const blob = await DB.get('blobs', tr.id);
+    if (!blob) return null;
+    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    if (!OAC) return null;
+    const ctx = new OAC(1, 1, WAVE_RATE);
+    const buf = await blob.arrayBuffer();
+    const audio = await new Promise((res, rej) => {
+      const p = ctx.decodeAudioData(buf, res, rej);
+      if (p && p.then) p.then(res, rej);
+    });
+    const ch = [];
+    for (let c = 0; c < audio.numberOfChannels; c++) ch.push(audio.getChannelData(c));
+    const len = audio.length, peaks = new Float32Array(WAVE_COLS);
+    let max = 1e-6;
+    for (let b = 0; b < WAVE_COLS; b++) {
+      const s0 = Math.floor(b * len / WAVE_COLS), s1 = Math.floor((b + 1) * len / WAVE_COLS);
+      let pk = 0;
+      for (const d of ch) for (let i = s0; i < s1; i += 2) { const v = d[i] < 0 ? -d[i] : d[i]; if (v > pk) pk = v; }
+      peaks[b] = pk; if (pk > max) max = pk;
+    }
+    const out = new Uint8Array(WAVE_COLS);
+    for (let b = 0; b < WAVE_COLS; b++) out[b] = Math.round(Math.sqrt(peaks[b] / max) * 255);
+    Store.putWave(tr.id, out);
+    return out;
+  },
+};
+/* scrubber: mirrored peaks, played part lit, playhead in accent */
+function drawScrubber(x, yc, w, p, wave, half, t) {
+  const head = Math.round((w - 1) * p);
+  for (let i = 0; i < w; i++) {
+    const played = i <= head;
+    if (wave) {
+      const pk = wave[Math.min(WAVE_COLS - 1, Math.floor(i / w * WAVE_COLS))];
+      const h = Math.max(0, Math.round(pk / 255 * half));
+      vline(x + i, yc - h, h * 2 + 1, played ? INK.LIT : INK.DIM);
+    } else px(x + i, yc, played ? INK.LIT : ((i & 1) ? INK.OFF : INK.DIM));
+  }
+  vline(x + head, yc - half - 1, half * 2 + 3, INK.ACC);
+}
+
+/* visualiser 1: 40-band spectrum with peak hold, segmented every other row */
+const VIS_H = 20;
 const Spec = {
   N: 40, h: new Float32Array(40), peak: new Float32Array(40), hold: new Float32Array(40),
   bins: null, edges: null, last: 0,
@@ -2793,10 +3016,7 @@ const Spec = {
         this.bins = new Uint8Array(an.frequencyBinCount);
         const sr = an.context.sampleRate, n = an.frequencyBinCount;
         this.edges = new Uint16Array(this.N + 1);
-        for (let i = 0; i <= this.N; i++) {
-          const f = 40 * Math.pow(16000 / 40, i / this.N);
-          this.edges[i] = clamp(Math.round(f / (sr / 2) * n), 1, n - 1);
-        }
+        for (let i = 0; i <= this.N; i++) this.edges[i] = clamp(Math.round(40 * Math.pow(16000 / 40, i / this.N) / (sr / 2) * n), 1, n - 1);
         for (let i = 1; i <= this.N; i++) if (this.edges[i] <= this.edges[i - 1]) this.edges[i] = this.edges[i - 1] + 1;
       }
       an.getByteFrequencyData(this.bins);
@@ -2807,76 +3027,122 @@ const Spec = {
       let v = 0;
       if (src) {
         for (let k = this.edges[i]; k < this.edges[i + 1] && k < src.length; k++) if (src[k] > v) v = src[k];
-        v = Math.pow(v / 255, 1.6) * 24 * (0.85 + i / this.N * 0.35);   // tilt: lift the highs a little
+        v = Math.pow(v / 255, 1.6) * (VIS_H + 2) * (0.85 + i / this.N * 0.35);
       }
-      this.h[i] = v > this.h[i] ? lerp(this.h[i], v, 0.65) : Math.max(0, this.h[i] - dt * 46);
+      this.h[i] = v > this.h[i] ? lerp(this.h[i], v, 0.65) : Math.max(0, this.h[i] - dt * 44);
       if (this.h[i] >= this.peak[i]) { this.peak[i] = this.h[i]; this.hold[i] = 0.35; }
-      else if ((this.hold[i] -= dt) < 0) this.peak[i] = Math.max(0, this.peak[i] - dt * 20);
+      else if ((this.hold[i] -= dt) < 0) this.peak[i] = Math.max(0, this.peak[i] - dt * 18);
       energy += this.h[i] + this.peak[i];
     }
     return live || energy > 0.5;
   },
-  draw(y0) {                       // bars grow up from y0, segmented every other row
+  draw(y0) {
     for (let i = 0; i < this.N; i++) {
-      const x = i * 4, n = Math.min(22, Math.round(this.h[i]));
-      for (let k = 0; k < n; k += 2) rect(x, y0 - k, 3, 1, k >= 18 ? 3 : 2);
-      const p = Math.min(22, Math.round(this.peak[i]));
-      if (p > 1) rect(x, y0 - p, 3, 1, 3);
-      else px(x + 1, y0, 1);
+      const x = i * 4, n = Math.min(VIS_H, Math.round(this.h[i]));
+      for (let k = 0; k < n; k += 2) rect(x, y0 - k, 3, 1, k >= VIS_H - 4 ? INK.ACC : INK.LIT);
+      const p = Math.min(VIS_H, Math.round(this.peak[i]));
+      if (p > 1) rect(x, y0 - p, 3, 1, INK.ACC); else px(x + 1, y0, INK.DIM);
     }
   },
 };
+/* visualiser 2: oscilloscope, triggered on a rising zero crossing */
+const Scope = {
+  buf: null, decay: 0,
+  draw(y0, t) {
+    const mid = y0 - VIS_H / 2, live = S.playing && Engine.analysing();
+    dots(0, mid, LW, INK.DIM, 4);
+    if (!live) return false;
+    const an = Engine.an;
+    if (!this.buf || this.buf.length !== an.fftSize) this.buf = new Uint8Array(an.fftSize);
+    an.getByteTimeDomainData(this.buf);
+    const b = this.buf;
+    let s = 0;
+    for (let i = 1; i < b.length / 2; i++) if (b[i - 1] < 128 && b[i] >= 128) { s = i; break; }
+    const stride = Math.max(1, Math.floor((b.length - s) / LW / 2));
+    let py = null;
+    for (let x = 0; x < LW; x++) {
+      const v = b[s + x * stride] - 128;
+      const y = Math.round(clamp(mid - v / 128 * (VIS_H / 2 + 2), y0 - VIS_H, y0));
+      if (py == null) px(x, y, INK.LIT);
+      else { const a = Math.min(py, y), h = Math.abs(py - y) + 1; vline(x, a, h, Math.abs(v) > 100 ? INK.ACC : INK.LIT); }
+      py = y;
+    }
+    return true;
+  },
+};
+
 function drawDisc(cx, cy, t) {     // placeholder art: a pixel record
-  circle(cx, cy, 18, 2);
-  circle(cx, cy, 14, 1);
-  circle(cx, cy, 11, 1);
-  circle(cx, cy, 5, 2);
-  px(cx, cy, 2);
-  const a = S.playing ? t / 1000 * 3.2 : 0.6;
-  px(Math.round(cx + Math.cos(a) * 16), Math.round(cy + Math.sin(a) * 16), 3);
-  px(Math.round(cx + Math.cos(a) * 16) + 1, Math.round(cy + Math.sin(a) * 16), 3);
+  circle(cx, cy, 18, INK.LIT);
+  circle(cx, cy, 14, INK.DIM);
+  circle(cx, cy, 11, INK.DIM);
+  circle(cx, cy, 5, INK.LIT);
+  px(cx, cy, INK.LIT);
+  const a = S.playing && !REDUCED.matches ? t / 1000 * 3.2 : 0.6;
+  rect(Math.round(cx + Math.cos(a) * 16), Math.round(cy + Math.sin(a) * 16), 2, 1, INK.ACC);
+}
+/* loading = we are meant to be playing but the clock has not moved lately.
+   This covers first load, buffering and a stalled (silent) element alike.  */
+const STALL_MS = 700;
+const Progress = { lastT: -1, advT: 0 };
+function stalled(t) {
+  const tt = Engine.time;
+  if (tt !== Progress.lastT) { Progress.lastT = tt; Progress.advT = t; }
+  if (!S.playing) { Progress.advT = t; return false; }
+  return t - Progress.advT > STALL_MS;
 }
 function drawNow(t) {
   const tr = S.tracks[S.cur] || S.tracks[0];
   if (!tr) return drawEmpty(t);
   let anim = false;
   statusBar(t);
-  // cover: 40x40 dithered, or the spinning record
+  // cover: 40×40 dithered, or the turning record
   const bits = Covers.bits.get(tr.id);
   if (bits) {
-    const inv = LCD.theme.glow === 0 ? 1 : 0;
+    const inv = LCD.theme.kind === 'emissive' ? 0 : 1;      // on paper/LCD, ink = dark
     for (let y = 0; y < 40; y++) for (let x = 0; x < 40; x++)
-      if (bits[y * 40 + x] ^ inv) px(x, 11 + y, 2);
-  } else { drawDisc(20, 31, t); anim = anim || S.playing; }
+      if (bits[y * 40 + x] ^ inv) px(x, 10 + y, INK.LIT);
+  } else { drawDisc(20, 30, t); anim = anim || S.playing; }
   // text column
   const ts = (t - (S.trackT0 || 0)) / 1000;
-  anim = marquee(tr.title, 45, 12, 115, F5, 2, ts) || anim;
-  anim = marquee(tr.artist || 'UNKNOWN ARTIST', 45, 22, 115, F3, 2, ts, 18) || anim;
-  if (tr.album) anim = marquee(tr.album, 45, 29, 115, F3, 1, ts, 18) || anim;
+  anim = marquee(tr.title, 45, 11, 115, F5, INK.LIT, ts) || anim;
+  anim = marquee(tr.artist || 'UNKNOWN ARTIST', 45, 21, 115, F3, INK.LIT, ts, 18) || anim;
+  if (tr.album) anim = marquee(tr.album, 45, 28, 115, F3, INK.DIM, ts, 18) || anim;
   const info = [tr.kbps ? (tr.vbr ? 'VBR ' : '') + tr.kbps + 'K' : '', tr.fmt, tr.khz ? (tr.khz / 1000).toFixed(1).replace('.0', '') + 'K' : ''].filter(Boolean).join(' · ');
-  text(info, 45, 36, F3, 1);
-  // volume readout (or an honest hint when iOS owns the volume)
-  icon('spk', 45, 43, 1);
+  text(info, 45, 35, F3, INK.DIM);
+  // volume readout — or an honest hint when iOS owns the volume
+  icon('spk', 45, 42, INK.DIM);
   if (Engine.volumeWorks()) {
     const n = Math.round(S.vol * 16);
     for (let i = 0; i < 16; i++) {
-      if (i < n) rect(52 + i * 4, 45, 3, 3, S.encMode === 0 ? 2 : 1);
-      else px(53 + i * 4, 46, 1);
+      if (i < n) rect(52 + i * 4, 44, 3, 3, S.encMode === 0 ? INK.LIT : INK.DIM);
+      else px(53 + i * 4, 45, INK.DIM);
     }
-    textR(String(Math.round(S.vol * 100)), 159, 44, F3, S.encMode === 0 ? 2 : 1);
-  } else text('SIDE KEYS', 52, 44, F3, 1);
-  // spectrum
-  anim = Spec.update(t) || anim;
-  Spec.draw(77);
-  // progress
-  const d = S.dur || 0, el = S.playing ? Engine.time : (Engine.out.getAttribute('src') ? Engine.time || S.t : S.t);
-  const p = d ? clamp(el / d, 0, 1) : 0, w = Math.round(159 * p);
-  dots(0, 81, LW, 1, 2);
-  hline(0, 81, w, 2);
-  rect(Math.max(0, w - 1), 79, 2, 5, 3);
+    textR(String(Math.round(S.vol * 100)), 159, 43, F3, S.encMode === 0 ? INK.LIT : INK.DIM);
+  } else text('SIDE KEYS', 52, 43, F3, INK.DIM);
+  // visualiser
+  const visY = 71;
+  if (S.set.vis === 1) anim = Scope.draw(visY, t) || anim;
+  else { anim = Spec.update(t) || anim; Spec.draw(visY); }
+  // waveform scrubber (or an analysing sweep while it is being computed)
+  const d = S.dur || 0, el = Engine.out.getAttribute('src') ? (Engine.time || S.t) : S.t;
+  const p = d ? clamp(el / d, 0, 1) : 0;
+  const wave = Wave.get(tr);
+  drawScrubber(0, 77, LW, p, wave, 3, t);
+  if (!wave && Wave.busy(tr)) { const sx = Math.floor(t / 14) % (LW + 20) - 20; rect(Math.max(0, sx), 77, 12, 1, INK.ACC); anim = true; }
   // times — elapsed blinks while paused, like real hardware
-  if (S.playing || (t % 1000) < 620) text(fmtTime(el), 0, 85, F5, 2);
-  textR('-' + fmtTime(Math.max(0, d - el)), 159, 85, F5, 1);
+  if (S.playing || REDUCED.matches || (t % 1000) < 620) text(fmtTime(el), 0, 84, F5, INK.LIT);
+  textR('-' + fmtTime(Math.max(0, d - el)), 159, 84, F5, INK.DIM);
+  // centre: loading > sleep countdown > speed/crossfade chips
+  if (stalled(t)) {
+    textC('LOADING' + '.'.repeat(Math.floor(t / 250) % 4), LW / 2, 85, F3, INK.ACC);
+    anim = true;
+  } else {
+    const chips = [];
+    if (S.sleepUntil) chips.push('Z ' + (S.sleepUntil === 'eot' ? 'END' : Math.ceil((S.sleepUntil - Date.now()) / 60000) + 'M'));
+    if ((S.set.xfade || 0) > 0 && S.set.out === 'dsp') chips.push('XF' + S.set.xfade);
+    if (chips.length) textC(chips.join(' · '), LW / 2, 85, F3, INK.DIM);
+  }
+  if (!wave) Wave.request(tr);
   return anim || S.playing;
 }
 
@@ -3021,6 +3287,7 @@ const Interrupt = {
     this.ctxDropped = false;
     Engine.sync(true);
     LCD.dirty = true;
+    wake();
   },
 };
 
@@ -3096,37 +3363,56 @@ listeners.push(() => {
   KEYS.add.el.classList.toggle('active', typeof Library !== 'undefined' && Library.busy);
 });
 
-/* ---------- 30. frame loop ---------------------------------------------- */
-const anims = new Set();                // per-frame physics steppers (keys, encoder…)
-let lastTs = 0;
+/* ---------- 30. frame loop: runs only while something moves -------------
+   Physics steppers and the display ask for frames; when everything is at
+   rest the loop stops (battery), and wake() restarts it on demand.        */
+const anims = new Set();
+let lastTs = 0, rafId = 0;
+function wake() { if (!rafId) rafId = requestAnimationFrame(frame); }
+function animate(stepper) { anims.add(stepper); wake(); }
 function frame(ts) {
-  requestAnimationFrame(frame);
+  rafId = 0;
   const dt = Math.min(0.05, (ts - (lastTs || ts)) / 1000);
   lastTs = ts;
   for (const a of anims) if (a(dt, ts) === false) anims.delete(a);
-  renderDisplay(ts);
+  const busy = renderDisplay(ts);
+  if (anims.size || busy) wake(); else lastTs = 0;
+}
+/* identity of what is on screen; a change starts a pixel transition */
+function screenKey() {
+  if (S.power !== 'on') return S.power;
+  const c = Nav.top();
+  const base = S.screen === 'list' && c ? `list:${c.id}:${c.arg == null ? '' : c.arg}` : `${S.screen}:${S.cur}`;
+  return OV.kind && OV.kind !== 'seek' && OV.kind !== 'vol' ? `${base}|${OV.kind}` : base;
 }
 function renderDisplay(t) {
-  if (!LCD.g) return;
-  if (!LCD.dirty && !LCD.anim && t > LCD.flickerUntil && !OV.kind) return;
-  FB.fill(0); noClip();
+  if (!LCD.g) return false;
+  if (!LCD.dirty && !LCD.anim && !LCD.trans && t > LCD.flickerUntil && !OV.kind) return false;
+  FB.fill(INK.OFF); noClip();
   let anim = false;
   if (S.power === 'off') anim = drawStandby(t);
   else if (S.power === 'boot') {
     anim = drawBoot(t);
-    if (!anim && bootFreeze == null) finishBoot();
+    if (!anim && bootFreeze == null) { finishBoot(); anim = true; }
   } else {
     anim = drawScreen(t);
     noClip();
     anim = drawOverlay(t) || anim;
   }
+  const key = screenKey();
+  if (key !== LCD.lastKey) {
+    if (LCD.lastKey && S.power === 'on') LCD.startTransition(t, key.includes('|') || LCD.lastKey.includes('|') ? 'overlay' : 'dissolve');
+    LCD.lastKey = key;
+  }
+  const moving = LCD.applyTransition(t);
   LCD.blit(t);
   LCD.anim = anim;
   LCD.dirty = false;
+  return anim || moving || !!OV.kind || t < LCD.flickerUntil;
 }
 function drawScreen(t) {
   if (S.screen === 'list' && Nav.top()) return drawList(t);
-  if (!S.tracks.length || typeof drawNow !== 'function') return drawEmpty(t);
+  if (!S.tracks.length) return drawEmpty(t);
   return drawNow(t);
 }
 
@@ -3179,7 +3465,7 @@ MS.init();
 Interrupt.init();
 LED.sync();
 Library.load();
-requestAnimationFrame(frame);
+wake();
 setInterval(() => { if (!document.hidden) Engine.sync(); }, 1000);
 
 /* offline shell when hosted next to sw.js (optional; fails quietly elsewhere) */
@@ -3190,7 +3476,7 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') {
 /* debug/test hooks (harmless in production) */
 window.__mp1 = { S, LCD, powerOn, commit, overlay, toast, render: () => { LCD.dirty = true; renderDisplay(now()); },
   step: (ms) => { for (let i = 0; i < ms / 16.67; i++) for (const a of anims) if (a(1 / 60, now()) === false) anims.delete(a); },
-  Enc, KEYS, Nav, App, Library, Player, Engine, DB, Covers, Tags, readMeta, Spec, freezeBoot: ms => { bootFreeze = ms; LCD.dirty = true; } };
+  Enc, KEYS, Nav, App, Library, Player, Engine, DB, Covers, Tags, readMeta, Spec, Wave, Store, fault, OV, THEMES, freezeBoot: ms => { bootFreeze = ms; LCD.dirty = true; } };
 window.__errs = [];
 addEventListener('error', e => window.__errs.push(String(e.message)));
 </script>
