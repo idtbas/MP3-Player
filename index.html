@@ -1173,6 +1173,28 @@ function drawOverlay(t) {
       if (sel) rect(bx, y + 16, 32, 13, 2); else frameRect(bx, y + 16, 32, 13, 1);
       textC(m, bx + 16, y + 19, F5, sel ? 0 : 1);
     });
+  } else if (OV.kind === 'add') {
+    const a = OV.a;
+    text('ADDING', 6, 15, F5, 2);
+    textR(`${two(a.k + 1)}/${two(a.n)}`, 154, 15, F5, 3);
+    marquee(a.name, 6, 29, 148, F3, 1, (t - OV.start) / 1000, 26);
+    frameRect(6, 41, 148, 7, 2);
+    rect(8, 43, Math.round(144 * (a.k + 0.5) / a.n), 3, 2);
+    const dotsN = Math.floor(t / 300) % 4;
+    textC('WRITING TO STORAGE' + '.'.repeat(dotsN), 80, 58, F3, 1);
+  } else if (OV.kind === 'air') {
+    const age = (t - OV.start) / 1000;
+    if (OV.a) for (let k = 0; k < 3; k++) {
+      const r = (age * 34 + k * 13) % 39;
+      circle(80, 40, Math.round(r), r > 28 ? 1 : 2);
+    }
+    rect(62, 24, 36, 32, 0);
+    const ic = ICON.air;
+    for (let r = 0; r < ic.h; r++) for (let c = 0; c < ic.w; c++)
+      if (ic.rows[r][c] === 'X') rect(70 + c * 3, 30 + r * 3, 3, 3, OV.a ? 3 : 1);
+    if (!OV.a) for (let i = 0; i < 22; i++) rect(69 + i, 51 - i, 2, 1, 2);
+    textC(OV.a ? 'WIRELESS ON' : 'WIRELESS OFF', 80, 66, F5, 2);
+    textC(OV.a ? 'AIRPLAY ROUTE ACTIVE' : 'BACK ON DEVICE', 80, 77, F3, 1);
   } else if (OV.kind === 'seek') {
     const x = 18, y = 28, w = 124, h = 34;
     rect(x - 1, y - 1, w + 2, h + 2, 0);
@@ -1203,7 +1225,7 @@ function statusBar(t, title) {
   } else {
     icon(S.playing ? 'play' : (S.cur >= 0 ? 'pause' : 'stop'), 0, 0, S.playing ? 3 : 2);
     const n = S.tracks.length;
-    text(n ? `${two(S.cur + 1)}/${two(n)}` : '--/--', 9, 1, F3, 2);
+    text(n ? `${S.cur >= 0 ? two(S.cur + 1) : '--'}/${two(n)}` : '--/--', 9, 1, F3, 2);
   }
   // middle: encoder mode tag (inverted chip) or HOLD
   if (S.hold) {
@@ -1562,12 +1584,14 @@ const Nav = {
   stack: [],
   top() { return this.stack[this.stack.length - 1]; },
   open(id, opts = {}) {
-    this.stack.push({ id, sel: opts.sel || 0, top: 0, arg: opts.arg, mode: null });
+    this.stack.push({ id, sel: opts.sel || 0, top: 0, arg: opts.arg, mode: null, selT: now() });
     S.screen = 'list';
     LCD.flicker(70);
     commit();
   },
   back() {
+    const c = this.top();
+    if (c && c.mode === 'move') return Library.drop(c);
     this.stack.pop();
     if (!this.stack.length) S.screen = homeScreen();
     LCD.flicker(60);
@@ -1582,6 +1606,7 @@ const Nav = {
     const n = clamp(c.sel + dir, 0, items.length - 1);
     if (n === c.sel) { Snd.blip(420, 0.02, 0.05); return; }   // end stop
     c.sel = n;
+    c.selT = now();
     commit();
   },
   select() {
@@ -1658,7 +1683,8 @@ function drawList(t) {
   let anim = false;
   // header
   text(def.title, 0, 1, F3, 2);
-  if (S.hold) { icon('lock', 112, 0, 3); }
+  if (S.hold) icon('lock', 112, 0, 3);
+  else if (def.hint) text(c.mode === 'move' ? 'MOVING' : def.hint, 44, 1, F3, c.mode === 'move' ? 3 : 1);
   if (!def.static && items.length) textR(`${two(c.sel + 1)}/${two(items.length)}`, 159, 1, F3, 1);
   dots(0, 8, LW, 1, 2);
   let y0 = 10, rows = 9;
@@ -1677,7 +1703,10 @@ function drawList(t) {
     const moving = sel && c.mode === 'move';
     if (sel) rect(0, y - 1, right, 9, moving && (t % 500) < 250 ? 3 : 2);
     const ink = sel ? 0 : 2;
-    if (!def.static) text(two(k + 1), 1, y + 1, F3, sel ? 0 : 1);
+    if (!def.static) {
+      if (it.now) icon('arrR', 3, y + 1, sel ? 0 : 3);
+      else text(two(k + 1), 1, y + 1, F3, sel ? 0 : 1);
+    }
     const lx = def.static ? 1 : 13;
     let vw = 0;
     if (it.bar) {                                   // brightness as five pixel blocks
@@ -1694,7 +1723,7 @@ function drawList(t) {
     const lw = right - lx - vw - 3;
     const label = it.label;
     const ink2 = it.accent && !sel ? 3 : (it.dim && !sel ? 1 : ink);
-    if (sel && !def.static) anim = marquee(label, lx, y, lw, F5, ink2, t / 1000) || anim;
+    if (sel && !def.static) anim = marquee(label, lx, y, lw, F5, ink2, (t - (c.selT || 0)) / 1000) || anim;
     else {
       const ox0 = cx0, ox1 = cx1;
       clip(lx, 0, lx + lw, LH);
@@ -1776,21 +1805,1134 @@ const App = {
   },
 };
 
-/* ---------- 18. player / library stubs (replaced by the audio engine) ---- */
-const Player = {
-  toggle() { if (!S.tracks.length) { Snd.err(); toast('NO SONGS', 'PRESS 02 ADD'); } },
-  next() {}, prev() {}, scanStart() {}, scanStop() {},
-  toggleShuffle() { S.shuffle = !S.shuffle; toast(S.shuffle ? 'SHUFFLE ON' : 'SHUFFLE OFF', null, 800); commit(); },
-  cycleRepeat() { S.repeat = (S.repeat + 1) % 3; toast(['REPEAT OFF', 'REPEAT ALL', 'REPEAT ONE'][S.repeat], null, 800); commit(); },
-  nudgeVolume(dir) { S.vol = clamp(Math.round((S.vol + dir * 0.02) * 50) / 50, 0, 1); overlay('vol', null, null, 1100); commit(); },
-  nudgeSeek() { overlay('seek', null, null, 900); },
+/* ---------- 18. storage: IndexedDB (songs survive reloads + offline) ---- */
+const isQuota = e => !!e && (e.name === 'QuotaExceededError' || e.code === 22 || /quota|space/i.test(e.message || ''));
+const DB = {
+  p: null,
+  open() {
+    if (this.p) return this.p;
+    this.p = new Promise((res, rej) => {
+      let req;
+      try { req = indexedDB.open('mp1-library', 1); } catch (e) { rej(e); return; }
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        for (const s of ['tracks', 'blobs', 'covers'])
+          if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, s === 'tracks' ? { keyPath: 'id' } : undefined);
+      };
+      req.onsuccess = () => { const db = req.result; db.onversionchange = () => db.close(); res(db); };
+      req.onerror = () => rej(req.error);
+      req.onblocked = () => rej(new Error('db blocked'));
+    });
+    this.p.catch(() => { this.p = null; });
+    return this.p;
+  },
+  async tx(stores, mode, fn) {
+    const db = await this.open();
+    return new Promise((res, rej) => {
+      let t;
+      try { t = db.transaction(stores, mode); } catch (e) { rej(e); return; }
+      const out = {};
+      t.oncomplete = () => res(out.v);
+      t.onerror = () => rej(t.error);
+      t.onabort = () => rej(t.error || new Error('aborted'));
+      fn(t, out);
+    });
+  },
+  async all() {
+    const rows = await this.tx(['tracks'], 'readonly', (t, o) => {
+      const r = t.objectStore('tracks').getAll();
+      r.onsuccess = () => { o.v = r.result; };
+    });
+    return (rows || []).sort((a, b) => a.order - b.order);
+  },
+  get(store, id) {
+    return this.tx([store], 'readonly', (t, o) => {
+      const r = t.objectStore(store).get(id);
+      r.onsuccess = () => { o.v = r.result; };
+    });
+  },
+  add(meta, blob, cover) {
+    return this.tx(['tracks', 'blobs', 'covers'], 'readwrite', t => {
+      t.objectStore('blobs').put(blob, meta.id);
+      if (cover) t.objectStore('covers').put(cover, meta.id);
+      t.objectStore('tracks').put(meta);
+    });
+  },
+  putMeta(meta) { return this.tx(['tracks'], 'readwrite', t => t.objectStore('tracks').put(meta)); },
+  saveOrder(list) {
+    return this.tx(['tracks'], 'readwrite', t => {
+      const s = t.objectStore('tracks');
+      list.forEach((tr, i) => { tr.order = i; s.put(tr); });
+    });
+  },
+  remove(id) { return this.tx(['tracks', 'blobs', 'covers'], 'readwrite', t => ['tracks', 'blobs', 'covers'].forEach(s => t.objectStore(s).delete(id))); },
+  clear() { return this.tx(['tracks', 'blobs', 'covers'], 'readwrite', t => ['tracks', 'blobs', 'covers'].forEach(s => t.objectStore(s).clear())); },
 };
+
+/* ---------- 19. tag reader: ID3v2.2/2.3/2.4, ID3v1, MPEG frame header ---- */
+const Tags = {
+  ss: (b, o) => ((b[o] & 0x7f) << 21) | ((b[o + 1] & 0x7f) << 14) | ((b[o + 2] & 0x7f) << 7) | (b[o + 3] & 0x7f),
+  u32: (b, o) => ((b[o] << 24) >>> 0) + (b[o + 1] << 16) + (b[o + 2] << 8) + b[o + 3],
+  str: (b, o, n) => String.fromCharCode.apply(null, b.subarray(o, o + n)),
+  latin1(b) { let s = ''; for (let i = 0; i < b.length && b[i]; i++) s += String.fromCharCode(b[i]); return s; },
+  unsync(b) {                                   // undo FF 00 -> FF
+    const out = new Uint8Array(b.length);
+    let j = 0;
+    for (let i = 0; i < b.length; i++) { out[j++] = b[i]; if (b[i] === 0xFF && b[i + 1] === 0x00) i++; }
+    return out.subarray(0, j);
+  },
+  decode(b, enc) {
+    try {
+      if (enc === 0) return Tags.latin1(b);
+      if (enc === 3) return new TextDecoder('utf-8').decode(b).split('\0')[0];
+      let le = enc === 1, o = 0;
+      if (b[0] === 0xFE && b[1] === 0xFF) { le = false; o = 2; } else if (b[0] === 0xFF && b[1] === 0xFE) { le = true; o = 2; }
+      const n = (b.length - o) & ~1;
+      return new TextDecoder(le ? 'utf-16le' : 'utf-16be').decode(b.subarray(o, o + n)).split('\0')[0];
+    } catch (e) { return ''; }
+  },
+  validId: (b, o, n) => { for (let i = 0; i < n; i++) { const c = b[o + i]; if (!((c >= 48 && c <= 57) || (c >= 65 && c <= 90))) return false; } return true; },
+  TEXT: { TIT2: 'title', TT2: 'title', TPE1: 'artist', TP1: 'artist', TALB: 'album', TAL: 'album',
+          TRCK: 'track', TRK: 'track', TLEN: 'tlen', TLE: 'tlen', TPE2: 'aartist', TP2: 'aartist' },
+  async v2(file) {
+    const r = { size: 0 };
+    const h = new Uint8Array(await file.slice(0, 10).arrayBuffer());
+    if (!(h[0] === 0x49 && h[1] === 0x44 && h[2] === 0x33) || h[3] < 2 || h[3] > 4) return r;
+    const ver = h[3], flags = h[5], size = Tags.ss(h, 6);
+    r.size = 10 + size + (flags & 0x10 ? 10 : 0);
+    let b = new Uint8Array(await file.slice(10, 10 + Math.min(size, 32 * 1024 * 1024)).arrayBuffer());
+    if ((flags & 0x80) && ver < 4) b = Tags.unsync(b);
+    let p = 0;
+    if ((flags & 0x40) && ver > 2) p = ver === 3 ? Tags.u32(b, 0) + 4 : Tags.ss(b, 0);
+    const idLen = ver === 2 ? 3 : 4, hdr = ver === 2 ? 6 : 10;
+    while (p + hdr <= b.length && Tags.validId(b, p, idLen)) {
+      const id = Tags.str(b, p, idLen);
+      let n;
+      if (ver === 2) n = (b[p + 3] << 16) | (b[p + 4] << 8) | b[p + 5];
+      else if (ver === 3) n = Tags.u32(b, p + 4);
+      else {
+        n = Tags.ss(b, p + 4);
+        // some taggers write plain 32-bit sizes in v2.4; trust whichever lands on a frame
+        const alt = Tags.u32(b, p + 4), q = p + hdr;
+        if (alt !== n && !Tags.validId(b, q + n, 4) && Tags.validId(b, q + alt, 4)) n = alt;
+      }
+      const fl = ver === 2 ? 0 : (b[p + 8] << 8) | b[p + 9];
+      let d = b.subarray(p + hdr, p + hdr + n);
+      p += hdr + n;
+      if (n <= 0) break;
+      if (ver === 3) {
+        if (fl & 0x00C0) continue;              // compressed / encrypted
+        if (fl & 0x0020) d = d.subarray(1);     // group id
+      } else if (ver === 4) {
+        if (fl & 0x000C) continue;
+        if (fl & 0x0040) d = d.subarray(1);
+        if (fl & 0x0001) d = d.subarray(4);     // data length indicator
+        if (fl & 0x0002) d = Tags.unsync(d);
+      }
+      Tags.frame(id, d, r);
+    }
+    return r;
+  },
+  frame(id, d, r) {
+    const key = Tags.TEXT[id];
+    if (key) {
+      if (!r[key]) r[key] = Tags.decode(d.subarray(1), d[0]).trim();
+      return;
+    }
+    if (id !== 'APIC' && id !== 'PIC') return;
+    const enc = d[0];
+    let o, mime;
+    if (id === 'PIC') {
+      mime = 'image/' + Tags.str(d, 1, 3).toLowerCase().replace('jpg', 'jpeg');
+      o = 4;
+    } else {
+      const e = d.indexOf(0, 1);
+      if (e < 0) return;
+      mime = Tags.latin1(d.subarray(1, e)) || 'image/jpeg';
+      o = e + 1;
+    }
+    const type = d[o++];
+    if (enc === 1 || enc === 2) { while (o + 1 < d.length && (d[o] || d[o + 1])) o += 2; o += 2; }
+    else { while (o < d.length && d[o]) o++; o++; }
+    const data = d.subarray(o);
+    if (data.length < 64 || mime === '-->') return;
+    if (!mime.includes('/')) mime = 'image/' + mime.toLowerCase();
+    if (!r.pic || (type === 3 && r.picType !== 3)) {
+      r.pic = new Blob([data.slice()], { type: mime });
+      r.picType = type;
+    }
+  },
+  async v1(file) {
+    if (file.size < 128) return null;
+    const b = new Uint8Array(await file.slice(file.size - 128).arrayBuffer());
+    if (Tags.str(b, 0, 3) !== 'TAG') return null;
+    const s = (o, n) => Tags.latin1(b.subarray(o, o + n)).trim();
+    return { title: s(3, 30), artist: s(33, 30), album: s(63, 30), track: b[125] === 0 && b[126] ? String(b[126]) : '' };
+  },
+  BR: {
+    '3-1': [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
+    '3-2': [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],
+    '3-3': [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+    '2-1': [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256],
+    '2-2': [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+  },
+  SR: { 3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000] },
+  async mpeg(file, start, tail) {
+    const b = new Uint8Array(await file.slice(start, start + 96 * 1024).arrayBuffer());
+    for (let i = 0; i + 4 < b.length; i++) {
+      if (b[i] !== 0xFF || (b[i + 1] & 0xE0) !== 0xE0) continue;
+      const vb = (b[i + 1] >> 3) & 3, lb = (b[i + 1] >> 1) & 3;
+      const bi = b[i + 2] >> 4, si = (b[i + 2] >> 2) & 3, pad = (b[i + 2] >> 1) & 1, mode = b[i + 3] >> 6;
+      if (vb === 1 || lb === 0 || bi === 0 || bi === 15 || si === 3) continue;
+      const v1 = vb === 3, layer = 4 - lb;
+      const br = Tags.BR[(v1 ? '3-' : '2-') + (v1 ? layer : Math.min(layer, 2))][bi];
+      const sr = Tags.SR[vb][si];
+      const spf = layer === 1 ? 384 : (layer === 3 && !v1 ? 576 : 1152);
+      const flen = layer === 1 ? Math.floor(12000 * br / sr + pad) * 4 : Math.floor(spf / 8 * 1000 * br / sr) + pad;
+      const j = i + flen;
+      if (j + 1 < b.length && !(b[j] === 0xFF && (b[j + 1] & 0xE0) === 0xE0)) continue;   // false sync
+      const xo = i + 4 + (v1 ? (mode === 3 ? 17 : 32) : (mode === 3 ? 9 : 17));
+      let frames = 0, vbr = false;
+      const tag = Tags.str(b, xo, 4);
+      if (tag === 'Xing' || tag === 'Info') {
+        const f = Tags.u32(b, xo + 4);
+        if (f & 1) frames = Tags.u32(b, xo + 8);
+        vbr = tag === 'Xing';
+      } else if (Tags.str(b, i + 36, 4) === 'VBRI') {
+        frames = Tags.u32(b, i + 36 + 14); vbr = true;
+      }
+      const bytes = Math.max(0, file.size - start - i - tail);
+      const dur = frames ? frames * spf / sr : bytes * 8 / (br * 1000);
+      return { kbps: vbr && dur ? Math.round(bytes * 8 / dur / 1000) : br, vbr, khz: sr, dur, fmt: 'MP' + (layer === 3 ? 3 : layer) };
+    }
+    return null;
+  },
+};
+const AUDIO_EXT = /\.(mp3|m4a|aac|mp4|wav|aif|aiff|flac|caf|ogg|opus|m4b)$/i;
+const looksAudio = f => (f.type && f.type.startsWith('audio/')) || AUDIO_EXT.test(f.name || '');
+function nameGuess(name) {
+  let base = String(name || 'UNTITLED').replace(/\.[a-z0-9]{2,4}$/i, '').replace(/_/g, ' ').trim();
+  base = base.replace(/^\d{1,3}[\s.\-]+(?=\S)/, '');
+  const parts = base.split(/\s+[-–]\s+/);
+  return parts.length >= 2 ? { artist: parts[0].trim(), title: parts.slice(1).join(' - ').trim() } : { title: base };
+}
+async function readMeta(file) {
+  const m = { name: file.name, size: file.size, type: file.type || '', title: '', artist: '', album: '',
+              track: '', dur: 0, kbps: 0, vbr: false, khz: 0, fmt: '', added: Date.now() };
+  let v2 = { size: 0 }, v1 = null;
+  try { v2 = await Tags.v2(file); } catch (e) { /* unreadable tag: fall through */ }
+  try { v1 = await Tags.v1(file); } catch (e) {}
+  m.title = v2.title || (v1 && v1.title) || '';
+  m.artist = v2.artist || v2.aartist || (v1 && v1.artist) || '';
+  m.album = v2.album || (v1 && v1.album) || '';
+  m.track = (v2.track || (v1 && v1.track) || '').split('/')[0];
+  try {
+    const mp = await Tags.mpeg(file, v2.size, v1 ? 128 : 0);
+    if (mp) Object.assign(m, { dur: mp.dur, kbps: mp.kbps, vbr: mp.vbr, khz: mp.khz, fmt: mp.fmt });
+  } catch (e) {}
+  if (!m.dur && v2.tlen) m.dur = (+v2.tlen || 0) / 1000;
+  if (!m.fmt) {
+    const ext = (file.name.match(/\.([a-z0-9]+)$/i) || [])[1] || '';
+    m.fmt = ({ m4a: 'AAC', mp4: 'AAC', m4b: 'AAC', aac: 'AAC', aif: 'AIFF', aiff: 'AIFF' })[ext.toLowerCase()] || ext.toUpperCase() || 'AUDIO';
+  }
+  if (!m.title) Object.assign(m, nameGuess(file.name), m.artist ? { artist: m.artist } : {});
+  return { meta: m, pic: v2.pic || null };
+}
+
+/* ---------- 20. cover art -> 40x40 1-bit (Atkinson dither) -------------- */
+const Covers = {
+  bits: new Map(),            // id -> Uint8Array(1600) | null
+  urls: new Map(),            // id -> object URL of the original art (lock screen)
+  pending: new Map(),
+  load(id) {
+    if (this.bits.has(id)) return Promise.resolve(this.bits.get(id));
+    if (this.pending.has(id)) return this.pending.get(id);
+    const p = (async () => {
+      let blob = null;
+      try { blob = await DB.get('covers', id); } catch (e) {}
+      if (!blob) { this.bits.set(id, null); return null; }
+      const url = URL.createObjectURL(blob);
+      try {
+        const img = new Image();
+        img.src = url;
+        await img.decode();
+        const N = 40, c = document.createElement('canvas');
+        c.width = c.height = N;
+        const g = c.getContext('2d', { willReadFrequently: true });
+        const s = Math.min(img.naturalWidth, img.naturalHeight);
+        g.drawImage(img, (img.naturalWidth - s) / 2, (img.naturalHeight - s) / 2, s, s, 0, 0, N, N);
+        const d = g.getImageData(0, 0, N, N).data;
+        const L = new Float32Array(N * N);
+        let lo = 1, hi = 0;
+        for (let i = 0; i < N * N; i++) {
+          const v = (0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]) / 255;
+          L[i] = v; if (v < lo) lo = v; if (v > hi) hi = v;
+        }
+        const span = Math.max(0.12, hi - lo);
+        for (let i = 0; i < N * N; i++) L[i] = Math.pow(clamp((L[i] - lo) / span, 0, 1), 0.9);
+        const out = new Uint8Array(N * N);
+        const spread = (x, y, e) => { if (x >= 0 && x < N && y < N) L[y * N + x] += e; };
+        for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+          const i = y * N + x, o = L[i], nv = o > 0.5 ? 1 : 0;
+          out[i] = nv;
+          const e = (o - nv) / 8;
+          spread(x + 1, y, e); spread(x + 2, y, e); spread(x - 1, y + 1, e);
+          spread(x, y + 1, e); spread(x + 1, y + 1, e); spread(x, y + 2, e);
+        }
+        this.bits.set(id, out);
+        this.urls.set(id, url);
+        return out;
+      } catch (e) {
+        URL.revokeObjectURL(url);
+        this.bits.set(id, null);
+        return null;
+      }
+    })();
+    this.pending.set(id, p);
+    p.finally(() => this.pending.delete(id));
+    return p;
+  },
+  drop(id) {
+    this.bits.delete(id);
+    const u = this.urls.get(id);
+    if (u) { URL.revokeObjectURL(u); this.urls.delete(id); }
+  },
+};
+
+/* ---------- 21. audio engine --------------------------------------------
+   Two <audio> elements:
+   · dsp  — routed through Web Audio: source → analyser → gain → out.
+            Gives real volume control (iOS ignores element.volume) and the
+            analyser reads the actual music.
+   · dir  — plays straight to the system output: the most robust path for
+            lock-screen playback and AirPlay. Volume = iPhone side keys.
+   In DIRECT mode the dsp element shadows the music silently (gain 0) so the
+   visualiser still analyses the real track; it pauses while hidden.       */
+const Engine = {
+  dsp: null, dir: null, out: null,
+  an: null, gain: null, graph: false, blessed: false, volOK: null,
+  init() {
+    const mk = shadow => {
+      const a = document.createElement('audio');
+      a.preload = 'auto';
+      a.setAttribute('playsinline', '');
+      a.setAttribute('webkit-playsinline', '');
+      a.setAttribute('x-webkit-airplay', 'allow');
+      a.className = 'offscreen';
+      document.body.appendChild(a);
+      for (const ev of ['loadedmetadata', 'durationchange', 'timeupdate', 'play', 'playing', 'pause', 'ended', 'error', 'waiting', 'stalled', 'seeked'])
+        a.addEventListener(ev, e => { if (a === this.out) Player.onMedia(ev, a, e); });
+      return a;
+    };
+    this.dsp = mk(); this.dir = mk();
+    this.out = S.set.out === 'direct' ? this.dir : this.dsp;
+    // wire the graph before any src is set: attaching a source node to an
+    // element that is already loaded can stall it. The context starts
+    // suspended and is resumed by the first gesture (unlockAudio).
+    this.graphUp();
+  },
+  graphUp() {
+    if (this.graph) return true;
+    const c = Snd.init();
+    if (!c) return false;
+    try {
+      const src = c.createMediaElementSource(this.dsp);
+      this.an = c.createAnalyser();
+      this.an.fftSize = 2048;
+      this.an.smoothingTimeConstant = 0.7;
+      this.gain = c.createGain();
+      src.connect(this.an); this.an.connect(this.gain); this.gain.connect(c.destination);
+      this.graph = true;
+      this.applyVolume();
+    } catch (e) { this.graph = false; }
+    return this.graph;
+  },
+  /* iOS: a play() inside a real gesture removes the per-element restriction
+     for good, so later auto-advance and lock-screen commands just work.    */
+  bless() {
+    if (this.blessed) return;
+    this.blessed = true;
+    for (const a of [this.dsp, this.dir]) {
+      try {
+        const t0 = a.currentTime, had = !!a.currentSrc;
+        a.muted = true;
+        const p = a.play();
+        const done = () => { if (a !== this.out || !S.playing) a.pause(); a.muted = false; if (had && !S.playing) try { a.currentTime = t0; } catch (e) {} };
+        if (p && p.then) p.then(done, () => { a.muted = false; }); else done();
+      } catch (e) { a.muted = false; }
+    }
+  },
+  volumeWorks() {
+    if (this.out === this.dsp) return this.graph || this.volOK !== false;
+    if (this.volOK == null) {
+      try { const v = this.dir.volume; this.dir.volume = 0.5; this.volOK = Math.abs(this.dir.volume - 0.5) < 0.01; this.dir.volume = v; }
+      catch (e) { this.volOK = false; }
+    }
+    return this.volOK;
+  },
+  applyVolume() {
+    const g = S.vol * S.vol;                        // perceptual taper
+    if (this.out === this.dsp) {
+      if (this.gain) this.gain.gain.setTargetAtTime(g, this.gain.context.currentTime, 0.02);
+      else try { this.dsp.volume = g; } catch (e) {}
+    } else {
+      if (this.gain) this.gain.gain.setTargetAtTime(0, this.gain.context.currentTime, 0.01);
+      try { this.dir.volume = g; } catch (e) {}
+    }
+  },
+  load(url) {
+    const shadow = this.out === this.dir ? this.dsp : this.dir;
+    this.out.src = url;
+    this.out.load();
+    if (this.out === this.dir) { shadow.src = url; shadow.load(); }
+    else if (shadow.getAttribute('src')) { shadow.removeAttribute('src'); shadow.load(); }
+  },
+  play() {
+    this.graphUp();
+    const c = Snd.ctx;
+    if (c && c.state !== 'running') c.resume().catch(() => {});
+    this.applyVolume();
+    const p = this.out.play();
+    this.sync(true);
+    return p;
+  },
+  pause() {
+    this.out.pause();
+    if (this.out === this.dir && !this.dsp.paused) this.dsp.pause();
+  },
+  seek(t) {
+    try { this.out.currentTime = t; } catch (e) {}
+    if (this.out === this.dir) try { this.dsp.currentTime = t; } catch (e) {}
+  },
+  get time() { return this.out.currentTime || 0; },
+  /* keep the silent analysis shadow aligned with the audible element */
+  sync(force) {
+    if (this.out !== this.dir || !this.graph) return;
+    const d = this.dsp, o = this.dir;
+    if (document.hidden || o.paused || !d.currentSrc) { if (!d.paused) d.pause(); return; }
+    const t = now();
+    if (d.paused || force) {
+      try { d.currentTime = o.currentTime; } catch (e) {}
+      d.play().catch(() => {});
+      this.lastFix = t;
+    } else if (Math.abs(d.currentTime - o.currentTime) > 1.5 && t - (this.lastFix || 0) > 4000) {
+      // a routed element reports its decode position, which runs a little
+      // ahead; only gross desyncs are worth a (glitchy) corrective seek
+      try { d.currentTime = o.currentTime; } catch (e) {}
+      this.lastFix = t;
+    }
+  },
+  analysing() { return this.graph && (this.out === this.dsp ? !this.dsp.paused : !this.dsp.paused && !document.hidden); },
+  setOut(mode) {
+    mode = mode === 'direct' ? 'direct' : 'dsp';
+    const next = mode === 'direct' ? this.dir : this.dsp;
+    S.set.out = mode;
+    if (next === this.out) { commit(); return; }
+    const prev = this.out, t = prev.currentTime || 0, src = prev.getAttribute('src'), wasPlaying = S.playing;
+    Player.quiet = true;                          // swallow the pause from the hand-over
+    prev.pause();
+    this.out = next;
+    if (src) {
+      next.src = src; next.load();
+      const shadow = mode === 'direct' ? this.dsp : this.dir;
+      if (mode === 'direct') { shadow.src = src; shadow.load(); }
+      else if (shadow.getAttribute('src')) { shadow.removeAttribute('src'); shadow.load(); }
+      Player.pendingSeek = t;
+      if (wasPlaying) Player.play();
+    }
+    setTimeout(() => { Player.quiet = false; }, 300);
+    this.applyVolume();
+    toast('AUDIO OUT', mode === 'dsp' ? 'DSP · ENCODER VOLUME' : 'DIRECT · SIDE KEYS', 1400);
+    commit();
+  },
+};
+
+/* ---------- 22. player: queue, transport, shuffle/repeat ---------------- */
+const Player = {
+  urls: new Map(), order: [], token: 0, pendingSeek: 0, quiet: false, wantPause: false,
+  scanTimer: 0, scanT0: 0, lastSave: 0, retry: new Set(), bad: new Set(), errSkips: 0,
+  cur() { return S.tracks[S.cur]; },
+  rebuildOrder() {
+    const n = S.tracks.length, idx = Array.from({ length: n }, (_, i) => i);
+    if (S.shuffle && n > 1) {
+      for (let i = n - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [idx[i], idx[j]] = [idx[j], idx[i]]; }
+      const k = idx.indexOf(S.cur);
+      if (k > 0) { idx.splice(k, 1); idx.unshift(S.cur); }
+    }
+    this.order = idx;
+  },
+  neighbour(dir) {
+    if (!S.tracks.length) return -1;
+    if (this.order.length !== S.tracks.length) this.rebuildOrder();
+    const k = this.order.indexOf(S.cur);
+    const j = k + dir;
+    if (j < 0 || j >= this.order.length) return null;   // ran off the end
+    return this.order[j];
+  },
+  async urlFor(tr, fresh) {
+    if (!fresh && this.urls.has(tr.id)) return this.urls.get(tr.id);
+    let blob = await DB.get('blobs', tr.id);
+    if (!blob) throw new Error('missing');
+    // fallback for WebKit builds that can't stream an IndexedDB-backed blob
+    if (fresh) blob = new Blob([await blob.arrayBuffer()], { type: blob.type || tr.type || 'audio/mpeg' });
+    const old = this.urls.get(tr.id);
+    if (old) URL.revokeObjectURL(old);
+    const u = URL.createObjectURL(blob);
+    this.urls.set(tr.id, u);
+    return u;
+  },
+  gc() {                                        // keep current + next URLs only
+    const keep = new Set();
+    const c = this.cur(); if (c) keep.add(c.id);
+    const n = this.neighbour(1); if (n != null && n >= 0 && S.tracks[n]) keep.add(S.tracks[n].id);
+    for (const [id, u] of this.urls) if (!keep.has(id)) { URL.revokeObjectURL(u); this.urls.delete(id); }
+  },
+  prefetch() {
+    let n = this.neighbour(1);
+    if (n == null && S.repeat === 1) n = this.order[0];
+    const tr = n != null && n >= 0 ? S.tracks[n] : null;
+    if (tr && !this.urls.has(tr.id)) this.urlFor(tr).catch(() => {});
+    if (tr) Covers.load(tr.id);
+  },
+  async load(i, { play = false, t = 0, fresh = false } = {}) {
+    const tr = S.tracks[i];
+    if (!tr) return;
+    const tok = ++this.token;
+    S.cur = i; S.t = t; S.dur = tr.dur || 0;
+    S.trackT0 = now();
+    LCD.flicker(170);
+    commit();
+    Covers.load(tr.id).then(() => { LCD.dirty = true; MS.update(); });
+    MS.update();
+    let url;
+    // the next track's URL is usually ready: set src synchronously so play()
+    // stays inside the gesture / ended handler that triggered it
+    if (!fresh && this.urls.has(tr.id)) url = this.urls.get(tr.id);
+    else {
+      try { url = await this.urlFor(tr, fresh); }
+      catch (e) { if (tok === this.token) this.fail(tr, 'FILE MISSING'); return; }
+      if (tok !== this.token) return;
+    }
+    this.pendingSeek = t;
+    this.quiet = true;
+    Engine.load(url);
+    this.quiet = false;
+    if (play) this.play();
+    else { S.playing = false; commit(); }
+    this.gc();
+    this.prefetch();
+  },
+  play() {
+    if (!S.tracks.length) { Snd.err(); toast('NO SONGS', 'PRESS 02 ADD'); return; }
+    if (S.cur < 0 || !Engine.out.getAttribute('src')) return this.load(Math.max(0, S.cur), { play: true, t: S.t });
+    this.wantPause = false;
+    S.playing = true; commit();
+    const p = Engine.play();
+    if (p && p.catch) p.catch(err => {
+      if (err && err.name === 'AbortError') return;
+      S.playing = false; commit();
+      if (err && err.name === 'NotAllowedError') toast('TAP PLAY', 'IOS NEEDS A TAP', 1400);
+    });
+  },
+  pause() {
+    this.wantPause = true;
+    S.playing = false;
+    Engine.pause();
+    savePersisted(true);
+    commit();
+  },
+  toggle() { S.playing ? this.pause() : this.play(); },
+  playIndex(i) {
+    if (i === S.cur && Engine.out.getAttribute('src')) { this.seek(0); this.play(); return; }
+    this.load(i, { play: true });
+  },
+  next(user) {
+    if (!S.tracks.length) return Snd.err();
+    let n = this.neighbour(1);
+    if (n == null) {
+      if (S.shuffle && (user || S.repeat === 1)) { this.rebuildOrder(); n = this.order[0] === S.cur && this.order.length > 1 ? this.order[1] : this.order[0]; }
+      else n = (user || S.repeat === 1) ? this.order[0] : null;
+    }
+    if (n == null) {                              // end of the list, repeat off
+      this.wantPause = true;
+      return this.load(this.order[0], { play: false });
+    }
+    this.load(n, { play: user ? S.playing || !this.wantPause : true });
+  },
+  prev() {
+    if (!S.tracks.length) return Snd.err();
+    if (Engine.time > 3) { this.seek(0); return; }
+    let n = this.neighbour(-1);
+    if (n == null) n = S.repeat === 1 ? this.order[this.order.length - 1] : S.cur;
+    if (n === S.cur) { this.seek(0); return; }
+    this.load(n, { play: S.playing });
+  },
+  seek(t) {
+    const d = S.dur || Engine.out.duration || 0;
+    t = clamp(t, 0, d ? Math.max(0, d - 0.25) : t);
+    Engine.seek(t);
+    S.t = t;
+    MS.position(true);
+    LCD.dirty = true;
+  },
+  toggleShuffle() {
+    S.shuffle = !S.shuffle;
+    this.rebuildOrder(); this.gc(); this.prefetch();
+    toast(S.shuffle ? 'SHUFFLE ON' : 'SHUFFLE OFF', null, 800);
+    commit();
+  },
+  cycleRepeat() {
+    S.repeat = (S.repeat + 1) % 3;
+    this.prefetch();
+    toast(['REPEAT OFF', 'REPEAT ALL', 'REPEAT ONE'][S.repeat], null, 800);
+    commit();
+  },
+  nudgeVolume(dir) {
+    S.vol = clamp(Math.round((S.vol + dir * 0.02) * 50) / 50, 0, 1);
+    Engine.applyVolume();
+    overlay('vol', null, null, 1100);
+    commit();
+  },
+  nudgeSeek(dir, rate) {
+    if (S.cur < 0) return toast('NO SONG LOADED');
+    const step = rate > 14 ? 10 : rate > 7 ? 5 : 2;
+    this.seek(Engine.time + dir * step);
+    overlay('seek', dir, null, 900);
+  },
+  scanStart(dir) {
+    if (S.cur < 0) return;
+    this.scanT0 = now();
+    clearInterval(this.scanTimer);
+    this.scanTimer = setInterval(() => {
+      const fast = now() - this.scanT0 > 1800;
+      this.seek(Engine.time + dir * (fast ? 8 : 3));
+      overlay('seek', dir, null, 500);
+      Snd.tick(1);
+    }, 140);
+  },
+  scanStop() { clearInterval(this.scanTimer); this.scanTimer = 0; },
+  fail(tr, why) {
+    this.bad.add(tr.id);
+    S.playing = false; commit();
+    toast("CAN'T PLAY", why || tr.title, 1600);
+    Snd.err();
+    if (this.bad.size >= S.tracks.length) return;     // nothing playable left
+    setTimeout(() => { if (this.cur() === tr) this.next(false); }, 1300);
+  },
+  onMedia(type, a, e) {
+    switch (type) {
+      case 'loadedmetadata':
+      case 'durationchange': {
+        const d = a.duration;
+        if (isFinite(d) && d > 0) {
+          S.dur = d;
+          const tr = this.cur();
+          if (tr && Math.abs((tr.dur || 0) - d) > 1) { tr.dur = d; DB.putMeta(tr).catch(() => {}); }
+        }
+        if (type === 'loadedmetadata' && this.pendingSeek > 0) {
+          const t = this.pendingSeek; this.pendingSeek = 0;
+          this.seek(Math.min(t, (S.dur || t + 1) - 1));
+        }
+        MS.position(true);
+        LCD.dirty = true;
+        break;
+      }
+      case 'timeupdate': {
+        S.t = a.currentTime;
+        const t = now();
+        if (t - this.lastSave > 4000) { this.lastSave = t; savePersisted(); }
+        MS.position();
+        break;
+      }
+      case 'play': case 'playing':
+        if (!this.wantPause) { S.playing = true; this.errSkips = 0; this.retry.delete((this.cur() || {}).id); }
+        Engine.sync(true);
+        MS.state();
+        commit();
+        break;
+      case 'pause':
+        if (this.quiet || a.ended) break;
+        if (!this.wantPause && S.playing) Interrupt.systemPaused();
+        S.playing = false;
+        Engine.sync();
+        MS.state();
+        commit();
+        break;
+      case 'seeked':
+        Engine.sync(true);
+        break;
+      case 'ended': {
+        const tr = this.cur();
+        if (S.repeat === 2 && tr) { this.seek(0); this.play(); break; }
+        this.next(false);
+        break;
+      }
+      case 'error': {
+        const tr = this.cur();
+        if (!tr || !a.getAttribute('src')) break;
+        if (!this.retry.has(tr.id)) {              // retry once from an in-memory copy
+          this.retry.add(tr.id);
+          this.load(S.cur, { play: S.playing, t: S.t, fresh: true });
+        } else this.fail(tr, 'DECODE ERROR');
+        break;
+      }
+    }
+  },
+};
+
+/* ---------- 23. library management --------------------------------------- */
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const fmtBytes = n => n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : n >= 1e6 ? (n / 1e6).toFixed(1) + ' MB' : Math.round(n / 1e3) + ' KB';
 const Library = {
   usage: { used: '--', free: '--', persist: '--' },
-  pick() { toast('ADD SONGS', 'COMING IN M4'); }, refreshStorage() {}, shift() {}, drop() {}, clear() {},
+  busy: false,
+  async load() {
+    try { S.tracks = await DB.all(); }
+    catch (e) { S.tracks = []; this.dbError = true; }
+    Player.rebuildOrder();
+    if (S.tracks.length) {
+      let i = S.tracks.findIndex(t => t.id === S.resumeId);
+      if (i < 0) i = 0;
+      Player.load(i, { t: i === S.tracks.findIndex(t => t.id === S.resumeId) ? S.resumeT : 0 });
+    }
+    commit();
+  },
+  pick() {
+    if (this.busy) return toast('BUSY', 'STILL ADDING');
+    const inp = $('#filePick');
+    inp.value = '';
+    try { inp.click(); } catch (e) { toast('PICKER BLOCKED'); }
+  },
+  async import(list) {
+    const files = Array.from(list || []).filter(looksAudio);
+    if (!files.length) { if (list && list.length) toast('NOT AUDIO', 'MP3 · AAC · WAV'); return; }
+    this.busy = true;
+    let added = 0, skipped = 0, full = false;
+    const wasEmpty = !S.tracks.length;
+    for (let k = 0; k < files.length; k++) {
+      const f = files[k];
+      overlay('add', { k, n: files.length, name: f.name }, null, 120000);
+      try {
+        const { meta, pic } = await readMeta(f);
+        meta.id = uid();
+        meta.order = S.tracks.length;
+        await DB.add(meta, f, pic);
+        S.tracks.push(meta);
+        added++;
+        commit();
+      } catch (e) {
+        if (isQuota(e)) { full = true; break; }
+        skipped++;
+      }
+    }
+    this.busy = false;
+    OV.kind = null;
+    Player.rebuildOrder();
+    if (full) { Snd.err(); toast('STORAGE FULL', `${added} ADDED`, 2400); }
+    else toast(`${added} SONG${added === 1 ? '' : 'S'} ADDED`, skipped ? `${skipped} SKIPPED` : null, 1500);
+    if (added) {
+      Snd.blip(1568, 0.05, 0.1);
+      if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+      if (wasEmpty || S.cur < 0) { S.screen = Nav.stack.length ? 'list' : 'now'; Player.load(0); }
+      else Player.prefetch();
+    }
+    commit();
+  },
+  async refreshStorage() {
+    try {
+      if (navigator.storage && navigator.storage.estimate) {
+        const e = await navigator.storage.estimate();
+        this.usage.used = fmtBytes(e.usage || 0);
+        this.usage.free = e.quota ? fmtBytes(Math.max(0, e.quota - (e.usage || 0))) : '--';
+      }
+      if (navigator.storage && navigator.storage.persisted) this.usage.persist = (await navigator.storage.persisted()) ? 'YES' : 'NO';
+    } catch (e) {}
+    LCD.dirty = true;
+  },
+  async remove(i) {
+    const tr = S.tracks[i];
+    if (!tr) return;
+    try { await DB.remove(tr.id); } catch (e) { return toast('REMOVE FAILED'); }
+    const wasCur = i === S.cur;
+    S.tracks.splice(i, 1);
+    Covers.drop(tr.id);
+    const u = Player.urls.get(tr.id); if (u) { URL.revokeObjectURL(u); Player.urls.delete(tr.id); }
+    if (i < S.cur) S.cur--;
+    DB.saveOrder(S.tracks).catch(() => {});
+    if (wasCur) {
+      Player.pause();
+      S.cur = -1;
+      if (S.tracks.length) Player.load(Math.min(i, S.tracks.length - 1));
+      else { Engine.out.removeAttribute('src'); Engine.out.load(); MS.update(); }
+    }
+    Player.rebuildOrder();
+    while (Nav.stack.length && Nav.top().id !== 'lib') Nav.stack.pop();
+    if (!S.tracks.length) Nav.home();
+    else if (Nav.top()) Nav.top().sel = clamp(i, 0, S.tracks.length - 1);
+    toast('REMOVED', null, 900);
+    commit();
+  },
+  shift(c, dir) {
+    const j = c.sel + dir;
+    if (j < 0 || j >= S.tracks.length) return Snd.blip(420, 0.02, 0.05);
+    const a = S.tracks[c.sel];
+    S.tracks[c.sel] = S.tracks[j]; S.tracks[j] = a;
+    if (S.cur === c.sel) S.cur = j; else if (S.cur === j) S.cur = c.sel;
+    c.sel = j;
+    commit();
+  },
+  drop(c) {
+    c.mode = null;
+    DB.saveOrder(S.tracks).catch(() => toast('SAVE FAILED'));
+    Player.rebuildOrder();
+    Snd.blip(1320, 0.03, 0.08);
+    toast('ORDER SAVED', null, 800);
+    commit();
+  },
+  async clear() {
+    try { await DB.clear(); } catch (e) { return toast('CLEAR FAILED'); }
+    Player.pause();
+    for (const t of S.tracks) Covers.drop(t.id);
+    for (const u of Player.urls.values()) URL.revokeObjectURL(u);
+    Player.urls.clear();
+    S.tracks = []; S.cur = -1; S.t = 0; S.dur = 0;
+    Engine.out.removeAttribute('src'); Engine.out.load();
+    MS.update();
+    Nav.home();
+    toast('LIBRARY CLEARED', null, 1200);
+  },
 };
-const Engine = { setOut(v) { S.set.out = v; }, volumeWorks: () => true };
-const Air = { pick() { toast('WIRELESS', 'NOT AVAILABLE'); } };
+$('#filePick').addEventListener('change', e => Library.import(e.target.files));
+
+/* library + per-song menus */
+MENUS.lib = {
+  title: 'LIBRARY',
+  hint: 'HOLD=EDIT',
+  items: () => S.tracks.map((tr, i) => ({
+    label: tr.title, value: tr.dur ? fmtTime(tr.dur).replace(/^0/, '') : '', now: i === S.cur,
+    act: () => { Player.playIndex(i); Nav.home(); },
+  })),
+  long: c => { Snd.thunk(); Nav.open('song', { arg: c.sel }); },
+};
+MENUS.song = {
+  title: 'SONG',
+  items: c => {
+    const tr = S.tracks[c.arg] || {};
+    return [
+      { label: 'PLAY', act: () => { Player.playIndex(c.arg); Nav.home(); } },
+      { label: 'MOVE', act: () => { Nav.back(); const l = Nav.top(); if (l) { l.sel = c.arg; l.mode = 'move'; toast('MOVE', 'TURN · PUSH TO DROP', 1200); } } },
+      { label: 'REMOVE', accent: true, act: () => Nav.open('confirm', { arg: { q: 'REMOVE SONG?', yes: () => Library.remove(c.arg) } }) },
+      { label: 'ARTIST', value: tr.artist || '--', dim: true },
+      { label: 'ALBUM', value: tr.album || '--', dim: true },
+      { label: 'FORMAT', value: [tr.kbps ? tr.kbps + 'K' : '', tr.fmt || ''].filter(Boolean).join(' '), dim: true },
+      { label: 'SIZE', value: fmtBytes(tr.size || 0), dim: true },
+    ];
+  },
+};
+
+/* ---------- 24. now-playing screen + spectrum ----------------------------- */
+const Spec = {
+  N: 40, h: new Float32Array(40), peak: new Float32Array(40), hold: new Float32Array(40),
+  bins: null, edges: null, last: 0,
+  update(t) {
+    const dt = Math.min(0.05, (t - (this.last || t)) / 1000);
+    this.last = t;
+    const live = S.playing && Engine.analysing();
+    let src = null;
+    if (live) {
+      const an = Engine.an;
+      if (!this.bins || this.bins.length !== an.frequencyBinCount) {
+        this.bins = new Uint8Array(an.frequencyBinCount);
+        const sr = an.context.sampleRate, n = an.frequencyBinCount;
+        this.edges = new Uint16Array(this.N + 1);
+        for (let i = 0; i <= this.N; i++) {
+          const f = 40 * Math.pow(16000 / 40, i / this.N);
+          this.edges[i] = clamp(Math.round(f / (sr / 2) * n), 1, n - 1);
+        }
+        for (let i = 1; i <= this.N; i++) if (this.edges[i] <= this.edges[i - 1]) this.edges[i] = this.edges[i - 1] + 1;
+      }
+      an.getByteFrequencyData(this.bins);
+      src = this.bins;
+    }
+    let energy = 0;
+    for (let i = 0; i < this.N; i++) {
+      let v = 0;
+      if (src) {
+        for (let k = this.edges[i]; k < this.edges[i + 1] && k < src.length; k++) if (src[k] > v) v = src[k];
+        v = Math.pow(v / 255, 1.6) * 24 * (0.85 + i / this.N * 0.35);   // tilt: lift the highs a little
+      }
+      this.h[i] = v > this.h[i] ? lerp(this.h[i], v, 0.65) : Math.max(0, this.h[i] - dt * 46);
+      if (this.h[i] >= this.peak[i]) { this.peak[i] = this.h[i]; this.hold[i] = 0.35; }
+      else if ((this.hold[i] -= dt) < 0) this.peak[i] = Math.max(0, this.peak[i] - dt * 20);
+      energy += this.h[i] + this.peak[i];
+    }
+    return live || energy > 0.5;
+  },
+  draw(y0) {                       // bars grow up from y0, segmented every other row
+    for (let i = 0; i < this.N; i++) {
+      const x = i * 4, n = Math.min(22, Math.round(this.h[i]));
+      for (let k = 0; k < n; k += 2) rect(x, y0 - k, 3, 1, k >= 18 ? 3 : 2);
+      const p = Math.min(22, Math.round(this.peak[i]));
+      if (p > 1) rect(x, y0 - p, 3, 1, 3);
+      else px(x + 1, y0, 1);
+    }
+  },
+};
+function drawDisc(cx, cy, t) {     // placeholder art: a pixel record
+  circle(cx, cy, 18, 2);
+  circle(cx, cy, 14, 1);
+  circle(cx, cy, 11, 1);
+  circle(cx, cy, 5, 2);
+  px(cx, cy, 2);
+  const a = S.playing ? t / 1000 * 3.2 : 0.6;
+  px(Math.round(cx + Math.cos(a) * 16), Math.round(cy + Math.sin(a) * 16), 3);
+  px(Math.round(cx + Math.cos(a) * 16) + 1, Math.round(cy + Math.sin(a) * 16), 3);
+}
+function drawNow(t) {
+  const tr = S.tracks[S.cur] || S.tracks[0];
+  if (!tr) return drawEmpty(t);
+  let anim = false;
+  statusBar(t);
+  // cover: 40x40 dithered, or the spinning record
+  const bits = Covers.bits.get(tr.id);
+  if (bits) {
+    const inv = LCD.theme.glow === 0 ? 1 : 0;
+    for (let y = 0; y < 40; y++) for (let x = 0; x < 40; x++)
+      if (bits[y * 40 + x] ^ inv) px(x, 11 + y, 2);
+  } else { drawDisc(20, 31, t); anim = anim || S.playing; }
+  // text column
+  const ts = (t - (S.trackT0 || 0)) / 1000;
+  anim = marquee(tr.title, 45, 12, 115, F5, 2, ts) || anim;
+  anim = marquee(tr.artist || 'UNKNOWN ARTIST', 45, 22, 115, F3, 2, ts, 18) || anim;
+  if (tr.album) anim = marquee(tr.album, 45, 29, 115, F3, 1, ts, 18) || anim;
+  const info = [tr.kbps ? (tr.vbr ? 'VBR ' : '') + tr.kbps + 'K' : '', tr.fmt, tr.khz ? (tr.khz / 1000).toFixed(1).replace('.0', '') + 'K' : ''].filter(Boolean).join(' · ');
+  text(info, 45, 36, F3, 1);
+  // volume readout (or an honest hint when iOS owns the volume)
+  icon('spk', 45, 43, 1);
+  if (Engine.volumeWorks()) {
+    const n = Math.round(S.vol * 16);
+    for (let i = 0; i < 16; i++) {
+      if (i < n) rect(52 + i * 4, 45, 3, 3, S.encMode === 0 ? 2 : 1);
+      else px(53 + i * 4, 46, 1);
+    }
+    textR(String(Math.round(S.vol * 100)), 159, 44, F3, S.encMode === 0 ? 2 : 1);
+  } else text('SIDE KEYS', 52, 44, F3, 1);
+  // spectrum
+  anim = Spec.update(t) || anim;
+  Spec.draw(77);
+  // progress
+  const d = S.dur || 0, el = S.playing ? Engine.time : (Engine.out.getAttribute('src') ? Engine.time || S.t : S.t);
+  const p = d ? clamp(el / d, 0, 1) : 0, w = Math.round(159 * p);
+  dots(0, 81, LW, 1, 2);
+  hline(0, 81, w, 2);
+  rect(Math.max(0, w - 1), 79, 2, 5, 3);
+  // times — elapsed blinks while paused, like real hardware
+  if (S.playing || (t % 1000) < 620) text(fmtTime(el), 0, 85, F5, 2);
+  textR('-' + fmtTime(Math.max(0, d - el)), 159, 85, F5, 1);
+  return anim || S.playing;
+}
+
+/* ---------- 25. Media Session: lock screen + Control Centre ------------- */
+const MS = {
+  ok: 'mediaSession' in navigator,
+  genericArt: null, lastPos: 0,
+  init() {
+    if (!this.ok) return;
+    const h = (a, fn) => { try { navigator.mediaSession.setActionHandler(a, fn); } catch (e) { /* unsupported action */ } };
+    h('play', () => { Interrupt.pausedBySystem = false; Player.play(); });
+    h('pause', () => Player.pause());
+    h('stop', () => Player.pause());
+    h('previoustrack', () => Player.prev());
+    h('nexttrack', () => Player.next(true));
+    h('seekto', d => { if (d && isFinite(d.seekTime)) Player.seek(d.seekTime); });
+    // no seekforward/backward: iOS would swap the track-skip buttons for ±10 s
+  },
+  art() {
+    if (this.genericArt) return this.genericArt;
+    this.genericArt = drawIcon(512).toDataURL('image/png');
+    return this.genericArt;
+  },
+  update() {
+    if (!this.ok) return;
+    const tr = Player.cur();
+    if (!tr) { try { navigator.mediaSession.metadata = null; } catch (e) {} this.state(); return; }
+    const cover = Covers.urls.get(tr.id);
+    const artwork = cover ? [{ src: cover, sizes: '512x512' }] : [{ src: this.art(), sizes: '512x512', type: 'image/png' }];
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: tr.title || 'Untitled', artist: tr.artist || 'MP-1', album: tr.album || '', artwork,
+      });
+    } catch (e) {}
+    this.state();
+    this.position(true);
+  },
+  state() {
+    if (!this.ok) return;
+    try { navigator.mediaSession.playbackState = S.cur < 0 ? 'none' : (S.playing ? 'playing' : 'paused'); } catch (e) {}
+  },
+  position(force) {
+    if (!this.ok || !navigator.mediaSession.setPositionState) return;
+    const t = now();
+    if (!force && t - this.lastPos < 1000) return;
+    this.lastPos = t;
+    const d = Engine.out.duration;
+    if (!isFinite(d) || d <= 0) return;
+    try { navigator.mediaSession.setPositionState({ duration: d, playbackRate: 1, position: clamp(Engine.time, 0, d) }); } catch (e) {}
+  },
+};
+
+/* ---------- 26. wireless: AirPlay route picker + honest status ----------
+   Safari can't tell AirPods from any other route, so nothing is guessed:
+   the LED and the display mirror exactly what WebKit reports.            */
+const Air = {
+  supported: typeof window.WebKitPlaybackTargetAvailabilityEvent !== 'undefined',
+  init() {
+    for (const a of [Engine.dsp, Engine.dir]) {
+      a.addEventListener('webkitplaybacktargetavailabilitychanged', e => {
+        if (a !== Engine.out) return;
+        S.wirelessAvail = e.availability === 'available';
+        commit();
+      });
+      a.addEventListener('webkitcurrentplaybacktargetiswirelesschanged', () => {
+        if (a !== Engine.out) return;
+        const w = !!a.webkitCurrentPlaybackTargetIsWireless;
+        if (w !== S.wireless) { S.wireless = w; this.announce(w); }
+        commit();
+      });
+    }
+  },
+  pick() {
+    const a = Engine.out;
+    if (typeof a.webkitShowPlaybackTargetPicker === 'function') {
+      try { a.webkitShowPlaybackTargetPicker(); return; } catch (e) {}
+    }
+    Snd.err();
+    toast('WIRELESS', 'NO AIRPLAY HERE', 1400);
+  },
+  announce(on) {
+    overlay('air', on, null, on ? 1700 : 1200);
+    if (on) { Snd.connect(); Hap.tap(); setTimeout(() => Hap.tap(), 110); }
+    else { Snd.disconnect(); Hap.tap(); }
+  },
+};
+
+/* ---------- 27. interruptions, visibility, background safety ------------ */
+const Interrupt = {
+  pausedBySystem: false, sessionInterrupted: false, ctxDropped: false, watching: false, lastCtx: '',
+  systemPaused() { this.pausedBySystem = true; },
+  init() {
+    const as = navigator.audioSession;
+    if (as && as.addEventListener) {
+      try {
+        as.addEventListener('statechange', () => {
+          if (as.state === 'interrupted') this.sessionInterrupted = true;
+          else if (this.sessionInterrupted) { this.sessionInterrupted = false; this.resume(); }
+        });
+      } catch (e) {}
+    }
+    document.addEventListener('visibilitychange', () => this.visibility());
+    addEventListener('pagehide', () => savePersisted(true));
+    addEventListener('pageshow', e => { if (e.persisted) { relayout(); LCD.dirty = true; } });
+  },
+  watchCtx() {
+    const c = Snd.ctx;
+    if (!c || this.watching) return;
+    this.watching = true;
+    this.lastCtx = c.state;
+    c.addEventListener('statechange', () => {
+      const st = c.state;
+      if (st === 'interrupted') this.sessionInterrupted = true;
+      if (st !== 'running' && document.hidden && S.playing && Engine.out === Engine.dsp) this.ctxDropped = true;
+      if (this.lastCtx === 'interrupted' && st === 'running' && this.pausedBySystem) this.resume();
+      this.lastCtx = st;
+    });
+  },
+  resume() {                       // a call or Siri ended: pick up where we were
+    if (!this.pausedBySystem || S.playing || S.cur < 0) return;
+    this.pausedBySystem = false;
+    Player.play();
+    toast('RESUMED', null, 900);
+  },
+  visibility() {
+    if (document.hidden) {
+      savePersisted(true);
+      Engine.sync();               // silent analysis shadow rests while hidden
+      return;
+    }
+    relayout();
+    const c = Snd.ctx;
+    const dropped = this.ctxDropped || (c && c.state !== 'running' && S.playing && Engine.out === Engine.dsp);
+    if (c && c.state !== 'running') c.resume().catch(() => {});
+    if (dropped && S.set.out === 'dsp') {
+      // this iOS build silenced Web Audio in the background: fall back to the
+      // direct path so the screen can lock without the music stopping
+      try { localStorage.setItem('mp1.bgfail', '1'); } catch (e) {}
+      Engine.setOut('direct');
+      toast('LOCK SCREEN', 'NOW DIRECT OUT', 2600);
+    }
+    this.ctxDropped = false;
+    Engine.sync(true);
+    LCD.dirty = true;
+  },
+};
+
+/* ---------- 28. audio unlock on the first real gesture -------------------
+   iOS counts touchend / pointerup (not touchstart) as a gesture for media. */
+function unlockAudio() {
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+  Snd.unlock();
+  Engine.graphUp();
+  Engine.bless();
+  Interrupt.watchCtx();
+}
+['pointerup', 'touchend', 'click'].forEach(ev => document.addEventListener(ev, () => {
+  if (!Engine.blessed || !Snd.ctx || Snd.ctx.state !== 'running') unlockAudio();
+}, { capture: true, passive: true }));
+
+/* ---------- 29. home-screen icon + inline manifest ----------------------- */
+function drawIcon(size) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d'), u = size / 180;
+  g.fillStyle = '#E8E6E1'; g.fillRect(0, 0, size, size);
+  // display window
+  g.fillStyle = '#1B1C1E';
+  const r = (x, y, w, h, rad) => { g.beginPath(); g.moveTo(x + rad, y); g.arcTo(x + w, y, x + w, y + h, rad); g.arcTo(x + w, y + h, x, y + h, rad); g.arcTo(x, y + h, x, y, rad); g.arcTo(x, y, x + w, y, rad); g.closePath(); };
+  r(22 * u, 24 * u, 136 * u, 62 * u, 9 * u); g.fill();
+  // "MP-1" in 5x7 dots
+  const word = 'MP-1', p = 3.6 * u, wpx = (word.length * 6 - 1) * p;
+  let x0 = 90 * u - wpx / 2;
+  const y0 = 55 * u - 3.5 * p;
+  g.fillStyle = '#F2EEE5';
+  for (const ch of word) {
+    const rows = F5.g[ch];
+    for (let ry = 0; ry < 7; ry++) for (let cx = 0; cx < 5; cx++)
+      if (rows[ry] & (1 << (4 - cx))) g.fillRect(x0 + cx * p, y0 + ry * p, p * 0.82, p * 0.82);
+    x0 += 6 * p;
+  }
+  // encoder + orange key
+  g.fillStyle = '#C9C6BF'; g.beginPath(); g.arc(70 * u, 128 * u, 30 * u, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#DAD8D3'; g.beginPath(); g.arc(70 * u, 128 * u, 26 * u, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#FF5A1C'; g.beginPath(); g.arc(70 * u + 17 * u, 128 * u - 11 * u, 3.6 * u, 0, Math.PI * 2); g.fill();
+  r(112 * u, 104 * u, 46 * u, 48 * u, 8 * u); g.fill();
+  g.fillStyle = '#222326';
+  g.beginPath(); g.moveTo(128 * u, 118 * u); g.lineTo(128 * u, 138 * u); g.lineTo(144 * u, 128 * u); g.closePath(); g.fill();
+  return c;
+}
+(function installIcons() {
+  try {
+    const ico = drawIcon(180).toDataURL('image/png');
+    $('#touchIcon').href = ico;
+    const big = drawIcon(512).toDataURL('image/png');
+    const base = location.href.split('#')[0];
+    const manifest = {
+      name: 'MP-1', short_name: 'MP-1', start_url: base, scope: base.replace(/[^/]*$/, ''),
+      display: 'standalone', orientation: 'portrait', background_color: '#B4AFA7', theme_color: '#B4AFA7',
+      icons: [{ src: big, sizes: '512x512', type: 'image/png', purpose: 'any' }],
+    };
+    $('#manifestLink').href = 'data:application/manifest+json,' + encodeURIComponent(JSON.stringify(manifest));
+  } catch (e) { /* icons are cosmetic */ }
+})();
 
 /* key faces glow while their function is active */
 listeners.push(() => {
@@ -1800,7 +2942,7 @@ listeners.push(() => {
   KEYS.air.el.classList.toggle('active', S.wireless);
 });
 
-/* ---------- 20. frame loop ---------------------------------------------- */
+/* ---------- 30. frame loop ---------------------------------------------- */
 const anims = new Set();                // per-frame physics steppers (keys, encoder…)
 let lastTs = 0;
 function frame(ts) {
@@ -1834,7 +2976,7 @@ function drawScreen(t) {
   return drawNow(t);
 }
 
-/* ---------- 21. power on + boot ----------------------------------------- */
+/* ---------- 31. power on + boot ----------------------------------------- */
 function powerOn() {
   if (S.power !== 'off') return;
   Snd.unlock();
@@ -1864,12 +3006,12 @@ $('#stage').addEventListener('pointerdown', e => {
   if (S.power === 'off') { e.stopPropagation(); e.preventDefault(); powerOn(); }
 }, true);
 
-/* ---------- 22. iOS page hygiene ---------------------------------------- */
+/* ---------- 32. iOS page hygiene ---------------------------------------- */
 ['gesturestart', 'gesturechange', 'gestureend', 'dblclick', 'contextmenu', 'selectstart'].forEach(ev =>
   document.addEventListener(ev, e => e.preventDefault(), { passive: false }));
 document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
 
-/* ---------- 23. start ---------------------------------------------------- */
+/* ---------- 33. start ---------------------------------------------------- */
 function relayout() {
   fitDevice();
   const s = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--s')) || 1;
@@ -1877,13 +3019,19 @@ function relayout() {
 }
 addEventListener('resize', relayout);
 relayout();
+Engine.init();
+Air.init();
+MS.init();
+Interrupt.init();
 LED.sync();
+Library.load();
 requestAnimationFrame(frame);
+setInterval(() => { if (!document.hidden) Engine.sync(); }, 1000);
 
 /* debug/test hooks (harmless in production) */
 window.__mp1 = { S, LCD, powerOn, commit, overlay, toast, render: () => { LCD.dirty = true; renderDisplay(now()); },
   step: (ms) => { for (let i = 0; i < ms / 16.67; i++) for (const a of anims) if (a(1 / 60, now()) === false) anims.delete(a); },
-  Enc, KEYS, Nav, App, freezeBoot: ms => { bootFreeze = ms; LCD.dirty = true; } };
+  Enc, KEYS, Nav, App, Library, Player, Engine, DB, Covers, Tags, readMeta, Spec, freezeBoot: ms => { bootFreeze = ms; LCD.dirty = true; } };
 window.__errs = [];
 addEventListener('error', e => window.__errs.push(String(e.message)));
 </script>
