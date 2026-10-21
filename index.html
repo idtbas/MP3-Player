@@ -40,6 +40,7 @@
 
 /* ---------- editions: one material system, three anodised finishes ----- */
 .device {
+  --acc-ink: #E8501A;
   --body: #E2E1DD;
   --cham-hi: #FDFCFA; --cham-mid: #D8D6D1; --cham-lo: #ABA8A1;
   --hl: rgba(255,255,255,.95);          /* top-left edge highlight */
@@ -70,6 +71,7 @@
   --screw-b: #C9D3CE;
 }
 .device[data-edition="graphite"] {
+  --acc-ink: #FF6A2E;
   --body: #393B3F;
   --cham-hi: #73767C; --cham-mid: #3C3E42; --cham-lo: #18191B;
   --hl: rgba(255,255,255,.16);
@@ -171,6 +173,7 @@ body {
 .lbl--c { transform: translateX(-50%); }
 .lbl--r { transform: translateX(-100%); }
 .lbl--ink { color: var(--ink); }
+.lbl--acc { color: var(--acc-ink); }
 /* debossed type: shadow on the top-left inner wall, light on the bottom-right */
 .engrave {
   position: absolute;
@@ -574,8 +577,14 @@ body {
       <span class="lbl lbl--s lbl--c" style="left:103px;top:372px">setup</span>
       <span class="lbl lbl--s lbl--c" style="left:161px;top:372px">fav</span>
       <span class="lbl lbl--s lbl--c" style="left:219px;top:372px">sleep</span>
-      <span class="lbl lbl--s lbl--c" style="left:277px;top:372px">vis</span>
+      <span class="lbl lbl--s lbl--c" style="left:277px;top:372px">deck</span>
       <span class="lbl lbl--s lbl--c" style="left:335px;top:372px">fx</span>
+      <!-- hold + turn 10: the deck, printed in the accent colour -->
+      <span class="lbl lbl--s lbl--acc" style="left:22px;top:384.5px"><svg class="sg" viewBox="0 0 6 6" aria-hidden="true"><path d="M4.9 2.6A2.1 2.1 0 1 1 3.4 1"/><path d="M2.6.2l1 .8-.9.9"/></svg> hold · turn</span>
+      <span class="lbl lbl--s lbl--c lbl--acc" style="left:161px;top:384.5px">space</span>
+      <span class="lbl lbl--s lbl--c lbl--acc" style="left:219px;top:384.5px">filter</span>
+      <span class="lbl lbl--s lbl--c lbl--acc" style="left:277px;top:384.5px">pitch</span>
+      <span class="lbl lbl--s lbl--c lbl--acc" style="left:335px;top:384.5px">loop</span>
 
       <!-- speaker grilles flanking the encoder -->
       <div class="spk" style="left:22px;top:458px"></div>
@@ -692,7 +701,7 @@ const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const lerp = (a, b, t) => a + (b - a) * t;
 const now = () => performance.now();
-const APP_VERSION = '2.0.1';
+const APP_VERSION = '2.1.0';
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)');
 
 /* ---------- 1. fit the device to the phone ------------------------------- */
@@ -795,7 +804,9 @@ const S = {
   encMode: 0,              // 0 VOL, 1 SEEK, 2 SCRL
   hold: false,
   wireless: false, wirelessAvail: false,
-  set: { sound: true, haptics: true, bright: 4, theme: 0, out: 'dsp', edition: 'orange', vis: 0, speed: 1, xfade: 0, tape: 0, eq: { low: 0, mid: 0, high: 0 } },
+  set: { sound: true, haptics: true, bright: 4, theme: 0, out: 'dsp', edition: 'orange', vis: 0, speed: 1, xfade: 0, tape: 0, eq: { low: 0, mid: 0, high: 0 },
+         key: 0, lock: true, space: 0 },
+  filter: 0,               // DJ filter: a performance control, never saved
   storageLow: false, sleepUntil: 0,
   queue: [], recent: [], ctx: { kind: 'all', key: null },
   shift: false,
@@ -1519,13 +1530,14 @@ function drawOverlay(t) {
       panel(4, 11, 152, 78);
       icon('shift', 10, 16, INK.ACC); text('SHIFT +', 18, 16, F3, INK.ACC);
       textR('SECOND FUNCTIONS', 150, 16, F3, INK.DIM);
-      const map = [['02', 'SETUP'], ['03', 'FAV'], ['04', 'SLEEP'], ['05', 'VIS'], ['06', 'FX'], ['07', 'RECENT'], ['08', 'STOP'], ['09', 'QUEUE'], ['10', 'SPEED']];
+      const map = [['02', 'SETUP'], ['03', 'FAV'], ['04', 'SLEEP'], ['05', 'DECK'], ['06', 'FX'], ['07', 'RECENT'], ['08', 'STOP'], ['09', 'QUEUE'], ['10', 'SPEED']];
       map.forEach(([n, f], i) => {
         const x = 10 + (i % 3) * 48, y = 28 + Math.floor(i / 3) * 11;
         text(n, x, y, F3, INK.DIM); text(f, x + 10, y, F3, INK.LIT);
       });
       dots(10, 63, 140, INK.DIM, 2);
       text('PUSH 10 = FIND', 10, 67, F3, INK.LIT);
+      textR('HOLD 03-06 + TURN', 150, 67, F3, INK.ACC);
       textR('TAP 01 = ONCE · 2× = LOCK', 150, 78, F3, INK.DIM);
       break;
     }
@@ -1540,7 +1552,7 @@ function drawOverlay(t) {
     case 'speed': {
       panel(18, 18, 124, 56);
       text('SPEED', 26, 24, F3, INK.LIT);
-      textR('PITCH KEPT', 134, 24, F3, INK.DIM);
+      textR(S.set.lock ? 'KEY LOCK' : 'TAPE', 134, 24, F3, S.set.lock ? INK.DIM : INK.ACC);
       textC(fmtSpeed(OV.a), LW / 2, 32, F5, OV.a === 1 ? INK.LIT : INK.ACC, 2);
       const w = 108, n = SPEEDS.length;
       SPEEDS.forEach((s, i) => {
@@ -1576,6 +1588,20 @@ function drawOverlay(t) {
       rect(2, 84, Math.round((LW - 4) * p), 5, INK.LIT);
       break;
     }
+    case 'param': drawParam(OV.a, OV.b === 'hint', t); break;
+    case 'render': {
+      const r = OV.a;
+      panel(6, 12, 148, 70);
+      icon('disk', 14, 18, INK.ACC); text('RENDER', 24, 19, F5, INK.LIT);
+      textR(r.stage === 'RENDERING' && r.p > 0 ? Math.round(r.p * 100) + '%' : r.stage, 146, 20, F3, INK.ACC);
+      marquee(r.title, 14, 31, 132, F3, INK.LIT, age, 26);
+      marquee(r.desc, 14, 39, 132, F3, INK.DIM, age, 26);
+      frameRect(14, 48, 132, 9, INK.LIT);
+      rect(16, 50, Math.round(128 * r.p), 5, INK.LIT);
+      if (r.stage !== 'RENDERING' || !r.p) rect(16 + Math.round((t / 12) % 122), 50, 6, 5, INK.ACC);   // alive, even without progress events
+      textC('A NEW SONG, NEXT TO THE ORIGINAL', LW / 2, 64, F3, INK.DIM);
+      break;
+    }
     case 'air': {
       rect(0, 9, LW, LH - 9, INK.OFF);
       clip(0, 10, LW, 62);
@@ -1592,6 +1618,94 @@ function drawOverlay(t) {
     }
   }
   return true;
+}
+
+
+/* the deck parameters, each with its own picture */
+const PARAM_NAME = { key: 'PITCH', filter: 'FILTER', space: 'SPACE', loop: 'LOOP' };
+const PARAM_KEY = { space: '03', filter: '04', key: '05', loop: '06' };
+const fmtHz = f => (f >= 1000 ? (f / 1000).toFixed(f >= 10000 ? 0 : 1).replace('.0', '') + 'K' : String(Math.round(f)));
+const PIANO_WHITE = [0, 2, 4, 5, 7, 9, 11];
+const filterHz = f => (f < 0 ? FILTER_OPEN_LP * Math.pow(FILTER_MIN_LP / FILTER_OPEN_LP, -f / FILTER_RANGE)
+                             : FILTER_OPEN_HP * Math.pow(FILTER_MAX_HP / FILTER_OPEN_HP, f / FILTER_RANGE));
+let respF = null, respA = null, respB = null, respP = null;
+function drawParam(p, hint, t) {
+  panel(6, 11, 148, 76);
+  const tr = Player.cur(), x0 = 13, xr = 147;
+  text(PARAM_NAME[p], x0, 16, F3, INK.LIT);
+  let big = '', right = '', live = false;
+  if (p === 'key') {
+    const k = S.set.key || 0;
+    big = (k > 0 ? '+' : '') + k + ' ST'; right = S.set.lock ? 'KEY LOCK' : 'TAPE'; live = !!k;
+    // two octaves of keys, middle C is the song's own key
+    for (let n = 0; n <= 24; n++) {
+      const r = n % 12, o = (n / 12) | 0;
+      if (!PIANO_WHITE.includes(r)) continue;
+      const x = 20 + (o * 7 + PIANO_WHITE.indexOf(r)) * 8;
+      if (n === k + 12) rect(x + 1, 45, 7, 17, INK.ACC);
+      frameRect(x, 44, 9, 19, INK.DIM);
+    }
+    for (let n = 0; n <= 24; n++) {
+      const r = n % 12, o = (n / 12) | 0;
+      if (PIANO_WHITE.includes(r)) continue;
+      const x = 20 + (o * 7 + PIANO_WHITE.indexOf(r - 1)) * 8 + 6;
+      rect(x, 44, 5, 11, n === k + 12 ? INK.ACC : INK.LIT);
+    }
+    rect(20 + 7 * 8 + 3, 65, 3, 1, INK.LIT);
+  } else if (p === 'filter') {
+    const f = S.filter || 0, n = Engine.nodes;
+    live = !!f;
+    right = f < 0 ? 'LOW-PASS' : f > 0 ? 'HIGH-PASS' : 'OPEN';
+    big = f ? (f < 0 ? 'LP ' + fmtHz(filterHz(f)) : 'HP ' + fmtHz(filterHz(f))) : 'OPEN';
+    // the real response of the two filters, 20 Hz – 20 kHz
+    const W = 120;
+    if (!respF) { respF = new Float32Array(W); respA = new Float32Array(W); respB = new Float32Array(W); respP = new Float32Array(W); for (let i = 0; i < W; i++) respF[i] = 20 * Math.pow(1000, i / (W - 1)); }
+    let py = null;
+    dots(20, 54, W, INK.DIM, 3);
+    if (n) { n.hp.getFrequencyResponse(respF, respA, respP); n.djlp.getFrequencyResponse(respF, respB, respP); }
+    if (n) for (let i = 0; i < W; i++) {
+      const db = 20 * Math.log10(Math.max(1e-6, respA[i] * respB[i]));
+      const y = Math.round(clamp(54 - db * 0.55, 43, 66));
+      if (py == null) px(20 + i, y, INK.LIT); else vline(20 + i, Math.min(py, y), Math.abs(py - y) + 1, f ? INK.ACC : INK.LIT);
+      py = y;
+    }
+    text('20', 20, 68, F3, INK.DIM); textR('20K', 140, 68, F3, INK.DIM);
+  } else if (p === 'space') {
+    const v = S.set.space || 0, s = v / SPACE_MAX;
+    live = !!v; big = v ? String(v) : 'DRY'; right = v ? 'WET ' + Math.round(s * 90) + '%' : 'NO ROOM';
+    hline(20, 64, 120, INK.DIM);
+    vline(20, 45, 19, INK.LIT);                      // the dry sound
+    if (v) {                                         // early reflections, then the tail dying away (2.4 s across)
+      const rnd = seeded(7);
+      [[3, 0.7], [5, 0.5], [7, 0.45], [10, 0.32], [13, 0.25]].forEach(([dx, g]) => vline(20 + dx, 64 - Math.round(17 * g * (0.4 + 0.6 * s)), Math.round(17 * g * (0.4 + 0.6 * s)), INK.LIT));
+      for (let x = 35; x < 140; x++) {
+        const tt = (x - 22) / 118 * 2.6, h = Math.round(15 * (0.4 + 0.6 * s) * Math.exp(-tt * 6.91 / 2.4) * (0.5 + 0.5 * rnd()));
+        if (h > 0) vline(x, 64 - h, h, INK.DIM);
+      }
+    }
+  } else if (p === 'loop') {
+    const b = Deck.loop.beats, bpm = tr && tr.bpm ? tr.bpm * S.set.speed : 0;
+    live = !!b;
+    big = Deck.loop.arming ? 'ARMING' : b ? fmtBeats(b) + (bpm ? (b > 1 ? ' BEATS' : ' BEAT') : ' × ½ S') : 'OFF';
+    right = bpm ? Math.round(bpm) + ' BPM' : 'NO BEAT FOUND';
+    const bars = b > 8, cells = 8, unit = bars ? 4 : 1, fill = b / unit;
+    for (let i = 0; i < cells; i++) {
+      const x = 20 + i * 15;
+      frameRect(x, 46, 13, 10, i % 4 === 0 ? INK.LIT : INK.DIM);
+      const part = clamp(fill - i, 0, 1);
+      if (part > 0) rect(x + 2, 48, Math.max(1, Math.round(9 * part)), 6, Deck.loop.arming && (t % 500) < 250 ? INK.DIM : INK.ACC);
+    }
+    if (b && Deck.on && !Deck.loop.arming) {         // where the loop is now
+      const ph = clamp((Deck.pos() - Deck.loop.a) / Math.max(0.001, Deck.loop.b - Deck.loop.a), 0, 1);
+      rect(20 + Math.round(ph * Math.min(cells, Math.ceil(fill)) * 15) - 1, 58, 3, 2, INK.LIT);
+    }
+    text(bars ? 'BARS' : 'BEATS', 20, 62, F3, INK.DIM);
+    if (b) textR(((Deck.loop.b - Deck.loop.a) || b * beatLen(tr)).toFixed(2) + ' S', 140, 62, F3, INK.DIM);
+  }
+  textR(right, xr, 16, F3, live && p !== 'loop' ? INK.ACC : INK.DIM);
+  textC(big, LW / 2, 26, F5, live ? INK.ACC : INK.LIT, 2);
+  dots(x0, 73, 134, INK.DIM, 2);
+  textC(hint ? 'TURN 10 · PUSH 10 = RESET' : `${PARAM_KEY[p]} HOLD + TURN · PUSH = RESET`, LW / 2, 77, F3, INK.DIM);
 }
 
 /* ---------- 11. screens --------------------------------------------------- */
@@ -1619,7 +1733,7 @@ function statusBar(t, title) {
   } else if (!title) {
     const tag = (S.set.speed || 1) !== 1 ? fmtSpeed(S.set.speed) : ['VOL', 'SEEK', 'SCRL'][S.encMode];
     const w = textW(tag, F3) + 4, x = 80 - Math.round(w / 2);
-    rect(x, 0, w, 7, INK.LIT); text(tag, x + 2, 1, F3, INK.OFF);
+    rect(x, 0, w, 7, S.set.lock === false && S.set.speed !== 1 ? INK.ACC : INK.LIT); text(tag, x + 2, 1, F3, INK.OFF);
   }
   // right, from the edge inward: wireless · repeat · shuffle · sleep · fav · storage
   icon('air', 153, 0, S.wireless ? INK.ACC : INK.DIM);
@@ -1880,7 +1994,9 @@ const Enc = {
     const t = e.timeStamp || now();
     if (t - this.lastT > 90) this.omega = 0;       // finger stopped before lifting
     this.omega = clamp(this.omega, -40, 40);
-    if (S.hold || REDUCED.matches || cancelled) this.omega = 0;   // calm: no free spin
+    // calm: no free spin. Nor while a key or SHIFT gives the turn its meaning:
+    // coasting on after the finger lets go would land in another function
+    if (S.hold || REDUCED.matches || cancelled || App.holding || Shift.active()) this.omega = 0;
     animate(this.stepper);
     App.encRelease();
   },
@@ -2158,7 +2274,7 @@ const Nav = {
 };
 
 /* the song menu, opened by holding the encoder on any song */
-function songMenu(id, from) { Snd.thunk(); Nav.open('song', { arg: { id, from } }); }
+function songMenu(id, from) { Snd.thunk(); Share.prepare(id); Nav.open('song', { arg: { id, from } }); }
 
 const VIEWS = {
   root: {
@@ -2168,6 +2284,7 @@ const VIEWS = {
       { label: 'LIBRARY', sub: true, value: String(S.tracks.length), act: () => Nav.open('library') },
       { label: 'SEARCH', sub: true, act: () => Search.open() },
       { label: 'QUEUE', sub: true, value: String(Lists.ids('queue').length), act: () => Nav.open('list', { arg: { kind: 'queue', title: 'QUEUE' } }) },
+      { label: 'DECK', sub: true, value: DeckUI.parts().length ? 'ON' : '', act: () => DeckUI.open() },
       { label: 'ADD SONGS', act: () => Library.pick() },
       { label: 'SETTINGS', sub: true, act: () => Nav.open('settings') },
       { label: 'ABOUT', sub: true, act: () => { Nav.open('about'); Library.refreshStorage(); } },
@@ -2224,6 +2341,7 @@ const VIEWS = {
         { label: 'PLAY NEXT', act: () => { Queue.add(tr.id, true); Nav.back(); } },
         { label: queued ? 'REMOVE FROM QUEUE' : 'ADD TO QUEUE', act: () => { queued ? Queue.remove(tr.id) : Queue.add(tr.id, false); Nav.back(); } },
         { label: tr.fav ? 'UNFAVOURITE' : 'FAVOURITE', fav: !tr.fav, act: () => Library.toggleFav(tr.id) },
+        { label: 'SHARE FILE', act: () => Share.file(tr) },
         { label: 'GO TO ARTIST', sub: true, act: () => Nav.open('list', { arg: { kind: 'artist', key: artistOf(tr), title: artistOf(tr) } }) },
         { label: 'GO TO ALBUM', sub: true, act: () => Nav.open('list', { arg: { kind: 'album', key: albumOf(tr), title: albumOf(tr) } }) },
       ];
@@ -2234,6 +2352,8 @@ const VIEWS = {
         { label: 'ARTIST', value: artistOf(tr), dim: true },
         { label: 'ALBUM', value: albumOf(tr), dim: true },
         { label: 'FORMAT', value: [tr.kbps ? tr.kbps + 'K' : '', tr.fmt || ''].filter(Boolean).join(' '), dim: true },
+        { label: 'TEMPO', value: tr.bpm ? Math.round(tr.bpm) + ' BPM' : tr.bpm === 0 ? 'NO STEADY BEAT' : '--', dim: true },
+        ...(tr.edit ? [{ label: 'EDIT OF', value: (byId(tr.edit.of) || {}).title || 'REMOVED SONG', dim: true }] : []),
         { label: 'PLAYS', value: String(tr.plays || 0), dim: true },
         { label: 'SIZE', value: fmtBytes(tr.size || 0), dim: true },
       );
@@ -2258,6 +2378,8 @@ const VIEWS = {
       { label: 'EQ + TAPE', sub: true, act: () => FX.open() },
       { label: 'CROSSFADE', value: S.set.xfade ? S.set.xfade + ' S' : 'GAPLESS', act: () => { S.set.xfade = XFADE_STEPS[(XFADE_STEPS.indexOf(S.set.xfade) + 1) % XFADE_STEPS.length]; } },
       { label: 'SPEED', value: fmtSpeed(S.set.speed), act: () => Player.setSpeed(SPEEDS[(SPEEDS.indexOf(S.set.speed) + 1) % SPEEDS.length]) },
+      { label: 'PITCH MODE', value: S.set.lock ? 'KEY LOCK' : 'TAPE', act: () => DeckUI.toggleLock() },
+      { label: 'DECK', sub: true, act: () => DeckUI.open() },
       { label: 'SLEEP', value: Sleep.label(), act: () => Sleep.cycle() },
       { head: 'LIBRARY' },
       { label: 'BACKUP', sub: true, act: () => Backup.save() },
@@ -2388,6 +2510,7 @@ function drawList(t) {
   const def = VIEWS[c.id];
   if (c.id === 'search') return drawSearch(c, t);
   if (c.id === 'fx') return FX.draw(c, t);
+  if (c.id === 'deck') return DeckPage.draw(c, t);
   const items = def.items(c);
   const title = typeof def.title === 'function' ? def.title(c) : def.title;
   let anim = false;
@@ -2589,8 +2712,12 @@ const fmtSpeed = v => v.toFixed(2).replace(/0+$/, '').replace(/\.$/, '.0') + '×
 const XFADE_STEPS = [0, 2, 4, 8];
 
 let lastHoldFlash = 0;
+/* hold one of these keys and turn 10: the deck parameter printed under it.
+   A tap still does the key's own job (on release, so a turn can claim it). */
+const HOLD_TURN = { add: 'space', air: 'filter', shuf: 'key', rpt: 'loop' };
 const App = {
   shifted: new Set(),                              // keys whose press was a shift function
+  holding: null, comboUsed: false,                 // a HOLD_TURN key is down; did 10 act on it?
   locked() {
     if (!S.hold) return false;
     const t = now();
@@ -2609,8 +2736,8 @@ const App = {
         return id ? Library.toggleFav(id) : Snd.err();
       }
       case 'air': return Sleep.cycle();
-      case 'shuf': S.set.vis = (S.set.vis + 1) % 2; toast('VISUALISER', ['SPECTRUM', 'SCOPE'][S.set.vis], 900); return commit();
-      case 'rpt': return FX.open();
+      case 'shuf': return Nav.stack.length && Nav.top().id === 'deck' ? Nav.back() : DeckUI.open();
+      case 'rpt': return Nav.stack.length && Nav.top().id === 'fx' ? Nav.back() : FX.open();
       case 'prev': return Nav.open('list', { arg: { kind: 'recent', title: 'RECENT' } });
       case 'play': return Player.stop();
       case 'next': return Nav.open('list', { arg: { kind: 'queue', title: 'QUEUE' } });
@@ -2621,21 +2748,39 @@ const App = {
     if (OV.kind === 'error' || OV.kind === 'storage') { OV.kind = null; LCD.dirty = true; }
     if (!this.ready() || this.locked()) return;
     if (Shift.active()) { this.shifted.add(name); Shift.use(); return this.shiftAction(name); }
+    if (HOLD_TURN[name]) { this.holding = name; this.comboUsed = false; return; }
     switch (name) {
       case 'menu': return Nav.stack.length ? Nav.back() : Nav.open('root');
       case 'play': return Player.toggle();
-      case 'shuf': return Player.toggleShuffle();
-      case 'rpt': return Player.cycleRepeat();
     }
   },
   keyLong(name) {
     if (!this.ready() || S.hold || this.shifted.has(name)) return;
+    if (HOLD_TURN[name]) {                          // held without turning: show what 10 would do
+      if (this.holding !== name || this.comboUsed) return;
+      if (name === 'rpt') Deck.prepare();           // decode now, so the loop engages at once
+      return DeckUI.hint(HOLD_TURN[name]);
+    }
     if ((name === 'prev' || name === 'next') && !this.inSearch()) Player.scanStart(name === 'next' ? 1 : -1);
     if (name === 'menu' && Nav.stack.length) Nav.home();
   },
   keyUp(name, cancelled, long) {
+    if (name === 'shift' || HOLD_TURN[name]) Enc.omega = 0;         // a modifier let go: stop any coasting turn
     if (name === 'shift') return Shift.up(cancelled);
     if (this.shifted.delete(name)) return;
+    if (HOLD_TURN[name]) {
+      const used = this.holding === name && this.comboUsed;
+      if (this.holding === name) this.holding = null;
+      if (OV.kind === 'param' && OV.b === 'hint') { OV.kind = null; LCD.dirty = true; }
+      if (!this.ready() || used || cancelled || long || S.hold) return;
+      switch (name) {
+        case 'shuf': return Player.toggleShuffle();
+        case 'rpt': return Deck.loop.beats ? Deck.setLoop(0) : Player.cycleRepeat();   // in a loop, 06 leaves it
+        case 'add': return Library.pick();          // system UI needs the release (a real user activation)
+        case 'air': return Air.pick();
+      }
+      return;
+    }
     if (!this.ready()) return;
     const sc = this.inSearch();
     if (sc && (name === 'prev' || name === 'next')) {
@@ -2647,13 +2792,10 @@ const App = {
       if (cancelled || S.hold) return;
       return name === 'next' ? Player.next(true) : Player.prev();
     }
-    if (cancelled || S.hold) return;
-    // these two need the release (a real user activation) to open system UI
-    if (name === 'add') return Library.pick();
-    if (name === 'air') return Air.pick();
   },
   encoder(dir, rate) {
     if (!this.ready() || this.locked()) return;
+    if (this.holding) { this.comboUsed = true; return DeckUI.turn(HOLD_TURN[this.holding], dir); }
     if (Shift.active()) { Shift.use(false); return Player.nudgeSpeed(dir); }
     if (S.screen === 'list') return Nav.move(dir);
     const mode = S.encMode;
@@ -2668,13 +2810,14 @@ const App = {
   encPress() {
     if (OV.kind === 'error' || OV.kind === 'storage') { OV.kind = null; LCD.dirty = true; return; }
     if (!this.ready() || this.locked()) return;
+    if (this.holding) { this.comboUsed = true; return DeckUI.reset(HOLD_TURN[this.holding]); }
     if (Shift.active()) { Shift.use(); return Search.open(); }
     if (S.screen === 'list') return Nav.select();
     if (S.screen === 'empty') return Library.pick();
     Player.toggle();
   },
   encLong() {
-    if (!this.ready() || this.locked()) return;
+    if (!this.ready() || this.locked() || this.holding) return;
     if (S.screen === 'list') return Nav.long();
     S.encMode = (S.encMode + 1) % 3;
     overlay('mode', S.encMode, null, 1000);
@@ -3008,8 +3151,9 @@ const Covers = {
    DSP output (default): two decks, each an <audio> routed into Web Audio.
 
      deck A ─ gain ┐
-                    ├─ EQ low/mid/high ─ tape ─ analyser ─ master ─ limiter ─ out
-     deck B ─ gain ┘
+                   ├─ pitch ─┐
+     deck B ─ gain ┘          ├─ EQ ─ tape ─ filter ─ space ─ analyser ─ master ─ limiter ─ out
+     song buffer ─ gain ─ pitch ┘   (loops: see the deck, 21c)
 
    Two decks make equal-power crossfades and gapless hand-overs possible;
    the master gain gives real volume control (iOS ignores element.volume).
@@ -3027,6 +3171,257 @@ const EQ_BANDS = [
 ];
 const EQ_RANGE_DB = 12, TAPE_MAX = 10;
 const LIMIT_DB = -1.5;
+const SHIFT_T = 0.1, SHIFT_MAX_SEMIS = 24;          // pitch shifter grain (s) and range
+const SPACE_S = 2.6, SPACE_TAIL_S = 3;              // reverb impulse length, render tail
+const FILTER_OPEN_LP = 22000, FILTER_OPEN_HP = 10, FILTER_MIN_LP = 180, FILTER_MAX_HP = 2500;
+const decodeIn = (c, data) => new Promise((res, rej) => { const p = c.decodeAudioData(data, res, rej); if (p && p.then) p.then(res, rej); });
+
+/* PITCH. The main shifter is an AudioWorklet: a read head runs through a
+   ring buffer at the pitch ratio (4-point Hermite interpolation). When it
+   drifts out of its 16–80 ms window it splices: a cross-correlation finds
+   the jump whose recent waveform continues the old head's, and the two
+   heads crossfade for 10 ms. Splicing in phase keeps tones on pitch and
+   music free of the warble of fixed-grain shifters.                      */
+const PITCH_WORKLET = `
+const N = 1 << 16, M = N - 1;
+function herm(b, x) {
+  const i = Math.floor(x), f = x - i;
+  const xm = b[(i - 1) & M], x0 = b[i & M], x1 = b[(i + 1) & M], x2 = b[(i + 2) & M];
+  const c1 = 0.5 * (x1 - xm), c2 = xm - 2.5 * x0 + 2 * x1 - 0.5 * x2, c3 = 0.5 * (x2 - xm) + 1.5 * (x0 - x1);
+  return ((c3 * f + c2) * f + c1) * f + x0;
+}
+class Pitch extends AudioWorkletProcessor {
+  static get parameterDescriptors() { return [{ name: 'ratio', defaultValue: 1, minValue: 0.5, maxValue: 2, automationRate: 'k-rate' }]; }
+  constructor() {
+    super();
+    const sr = sampleRate;
+    this.b = [new Float32Array(N), new Float32Array(N)]; this.m = new Float32Array(N);
+    this.w = 0;
+    this.D0 = Math.round(0.04 * sr); this.Dmin = Math.round(0.016 * sr); this.Dmax = Math.round(0.08 * sr);
+    this.C = Math.round(0.012 * sr); this.S = Math.round(0.010 * sr); this.X = Math.round(0.010 * sr);
+    this.r = -this.D0; this.r2 = 0; this.xf = 0;
+  }
+  corr(o, n) {
+    const m = this.m, C = this.C;
+    let s = 0, e = 1e-9;
+    for (let j = 0; j < C; j += this.step) { const b = m[(n - C + j) & M]; s += m[(o - C + j) & M] * b; e += b * b; }
+    return s / Math.sqrt(e);
+  }
+  match(rOld, rNom) {
+    const o = Math.floor(rOld), n0 = Math.floor(rNom);
+    let best = -Infinity, bk = 0;
+    this.step = 4;
+    for (let k = -this.S; k <= this.S; k += 4) { const v = this.corr(o, n0 + k); if (v > best) { best = v; bk = k; } }
+    const k0 = bk; best = -Infinity; this.step = 1;
+    for (let k = k0 - 3; k <= k0 + 3; k++) { const v = this.corr(o, n0 + k); if (v > best) { best = v; bk = k; } }
+    return n0 + bk + (rOld - o);
+  }
+  process(inputs, outputs, params) {
+    const inp = inputs[0] || [], out = outputs[0], n = out[0].length, p = params.ratio[0];
+    const a = inp[0], b = inp[1] || inp[0], b0 = this.b[0], b1 = this.b[1];
+    for (let i = 0; i < n; i++) {
+      const wi = (this.w + i) & M, l = a ? a[i] : 0, r = b ? b[i] : 0;
+      b0[wi] = l; b1[wi] = r; this.m[wi] = l + r;
+    }
+    const o0 = out[0], o1 = out[1];
+    for (let i = 0; i < n; i++) {
+      const d = this.w + i - this.r;
+      if (this.xf === 0 && (d < this.Dmin || d > this.Dmax)) {
+        this.r2 = this.r; this.r = this.match(this.r, this.w + i - this.D0); this.xf = this.X;
+      }
+      let l = herm(b0, this.r), r = herm(b1, this.r);
+      if (this.xf > 0) {
+        const g = this.xf / this.X;
+        l = l * (1 - g) + herm(b0, this.r2) * g; r = r * (1 - g) + herm(b1, this.r2) * g;
+        this.r2 += p; this.xf--;
+      }
+      o0[i] = l; if (o1) o1[i] = r;
+      this.r += p;
+    }
+    this.w += n;
+    return true;
+  }
+}
+registerProcessor('mp1-pitch', Pitch);
+`;
+let pitchUrl = null;
+const pitchModules = new WeakMap();
+function pitchWorklet(c) {             // load the module once per context; true when usable
+  if (!c.audioWorklet || typeof AudioWorkletNode === 'undefined') return Promise.resolve(false);
+  if (pitchModules.has(c)) return pitchModules.get(c);
+  let p;
+  try {
+    pitchUrl = pitchUrl || URL.createObjectURL(new Blob([PITCH_WORKLET], { type: 'application/javascript' }));
+    p = c.audioWorklet.addModule(pitchUrl).then(() => true, () => false);
+  } catch (e) { p = Promise.resolve(false); }
+  pitchModules.set(c, p);
+  return p;
+}
+/* fallback for browsers without worklets: two delay lines read a little
+   faster or slower than written, each faded with a sin² window that is
+   silent exactly when its read head jumps back (the windows sum to one) */
+function nativeShifter(c, input, wet) {
+  const sr = c.sampleRate, N = Math.max(128, Math.round(SHIFT_T * sr)), srcs = [], nodes = [];
+  const wave = fn => { const b = c.createBuffer(1, N, sr), d = b.getChannelData(0); for (let i = 0; i < N; i++) d[i] = fn(i / N); return b; };
+  const loop = (buf, to) => { const s = c.createBufferSource(); s.buffer = buf; s.loop = true; s.connect(to); s.start(0); srcs.push(s); };
+  const lines = [0, 0.5].map(ph => {
+    const r = x => (x + ph) % 1;
+    const dl = c.createDelay(SHIFT_T * 3 + 0.05);
+    dl.delayTime.value = 0.002;
+    const down = c.createGain(), up = c.createGain(), win = c.createGain();
+    down.gain.value = 0; up.gain.value = 0; win.gain.value = 0;
+    loop(wave(r), down);                               // delay grows: pitch goes down
+    loop(wave(x => 1 - r(x)), up);                     // delay shrinks: pitch goes up
+    loop(wave(x => Math.pow(Math.sin(Math.PI * r(x)), 2)), win.gain);
+    down.connect(dl.delayTime); up.connect(dl.delayTime);
+    input.connect(dl); dl.connect(win); win.connect(wet);
+    nodes.push(dl, win);
+    return { down, up };
+  });
+  return {
+    set(ratio, t, to) { for (const l of lines) { to(l.down.gain, ratio < 1 ? (1 - ratio) * SHIFT_T : 0); to(l.up.gain, ratio > 1 ? (ratio - 1) * SHIFT_T : 0); } },
+    stop() { for (const s of srcs) try { s.stop(); } catch (e) {} for (const n of nodes) try { n.disconnect(); } catch (e) {} try { input.disconnect(nodes[0]); input.disconnect(nodes[2]); } catch (e) {} },
+  };
+}
+/* the shifter wrapper: 0 semitones bypasses it entirely (no latency); the
+   worklet replaces the fallback as soon as its module has loaded         */
+function makeShifter(c) {
+  const input = c.createGain(), output = c.createGain(), dry = c.createGain(), wet = c.createGain();
+  input.connect(dry); dry.connect(output); wet.connect(output);
+  wet.gain.value = 0;
+  let impl = nativeShifter(c, input, wet), cur = 0, kind = 'native';
+  const ratioOf = semis => Math.pow(2, semis / 12);
+  const ready = pitchWorklet(c).then(ok => {
+    if (!ok) return false;
+    try {
+      const node = new AudioWorkletNode(c, 'mp1-pitch', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: 'explicit' });
+      impl.stop();
+      input.connect(node); node.connect(wet);
+      impl = { set(ratio, t) { node.parameters.get('ratio').setValueAtTime(clamp(ratio, 0.5, 2), t); }, stop() {} };
+      impl.set(ratioOf(cur), c.currentTime);
+      kind = 'worklet';
+      return true;
+    } catch (e) { return false; }
+  });
+  return {
+    input, output, ready,
+    get kind() { return kind; },
+    get semis() { return cur; },
+    set(semis, t = c.currentTime, tc = 0.02) {
+      semis = clamp(Math.round(semis * 100) / 100, -SHIFT_MAX_SEMIS, SHIFT_MAX_SEMIS);
+      const on = Math.abs(semis) > 0.01;
+      const to = (prm, v) => tc ? prm.setTargetAtTime(v, t, tc) : prm.setValueAtTime(v, t);
+      impl.set(ratioOf(semis), t, to);
+      to(wet.gain, on ? 1 : 0); to(dry.gain, on ? 0 : 1);
+      cur = semis;
+    },
+  };
+}
+/* SPACE: a plate-like room. 18 ms pre-delay, a few early reflections, then a
+   dense tail that darkens as it decays (RT60 2.4 s), decorrelated L/R.     */
+function makeImpulse(c) {
+  const sr = c.sampleRate, len = Math.floor(SPACE_S * sr), b = c.createBuffer(2, len, sr);
+  const pre = Math.floor(0.018 * sr), k = 6.91 / 2.4;
+  for (let ch = 0; ch < 2; ch++) {
+    const d = b.getChannelData(ch), rnd = seeded(0x51ACE + ch * 977);
+    let lp = 0;
+    for (let i = pre; i < len; i++) {
+      const t = (i - pre) / sr, damp = Math.min(0.93, 0.2 + t * 0.5);   // highs fade first
+      lp = lp * damp + (rnd() * 2 - 1) * (1 - damp);
+      d[i] = lp * Math.exp(-k * t) * (1 + damp) * Math.min(1, t / 0.004);
+    }
+    [[0.011, 0.5], [0.019, 0.34], [0.027, -0.3], [0.041, 0.22], [0.053, -0.15]].forEach(([at, g], j) => {
+      const i = pre + Math.floor((at + ch * 0.0023 * (j + 1)) * sr);
+      if (i < len) d[i] += g;
+    });
+  }
+  return b;
+}
+function makeNoise(c) {
+  const len = Math.floor(c.sampleRate * 0.25), b = c.createBuffer(1, len, c.sampleRate), d = b.getChannelData(0), rnd = seeded(0x5EED);
+  for (let i = 0; i < len; i++) d[i] = rnd() * 2 - 1;
+  return b;
+}
+function makeLimiter(c) {          // brick-wall-ish: boosts can never clip the output
+  const lim = c.createDynamicsCompressor();
+  lim.threshold.value = LIMIT_DB; lim.knee.value = 0; lim.ratio.value = 20;
+  lim.attack.value = 0.002; lim.release.value = 0.12;
+  return lim;
+}
+/* everything after the sources, built the same way live and for RENDER */
+function buildChain(c, input, noise) {
+  let node = input;
+  const eq = EQ_BANDS.map(b => {
+    const f = c.createBiquadFilter();
+    f.type = b.type; f.frequency.value = b.f; f.Q.value = b.q; f.gain.value = 0;
+    node.connect(f); node = f;
+    return f;
+  });
+  // tape: saturation → roll-off → wow & flutter (modulated delay) + hiss
+  const sat = c.createWaveShaper();
+  sat.oversample = '2x';
+  const lp = c.createBiquadFilter();
+  lp.type = 'lowpass'; lp.frequency.value = 20000; lp.Q.value = 0.5;
+  const wow = c.createDelay(0.05);
+  wow.delayTime.value = 0.006;
+  node.connect(sat); sat.connect(lp); lp.connect(wow);
+  const lfo = (hz) => { const o = c.createOscillator(), g = c.createGain(); o.frequency.value = hz; g.gain.value = 0; o.connect(g); g.connect(wow.delayTime); o.start(); return g; };
+  const wowDepth = lfo(0.55), flutterDepth = lfo(6.3);
+  const hissSrc = c.createBufferSource();
+  hissSrc.buffer = noise; hissSrc.loop = true;
+  const hissHp = c.createBiquadFilter();
+  hissHp.type = 'highpass'; hissHp.frequency.value = 3500;
+  const hiss = c.createGain();
+  hiss.gain.value = 0;
+  hissSrc.connect(hissHp); hissHp.connect(hiss); hissSrc.start();
+  const tapeOut = c.createGain();
+  wow.connect(tapeOut); hiss.connect(tapeOut);
+  // FILTER: one knob, low-pass to the left, high-pass to the right
+  const hp = c.createBiquadFilter();
+  hp.type = 'highpass'; hp.frequency.value = FILTER_OPEN_HP; hp.Q.value = 0.7;
+  const djlp = c.createBiquadFilter();
+  djlp.type = 'lowpass'; djlp.frequency.value = FILTER_OPEN_LP; djlp.Q.value = 0.7;
+  tapeOut.connect(hp); hp.connect(djlp);
+  // SPACE on a send; the convolver only joins once it is first used
+  const out = c.createGain(), dry = c.createGain(), send = c.createGain(), wet = c.createGain();
+  send.gain.value = 0; wet.gain.value = 0;
+  djlp.connect(dry); dry.connect(out); djlp.connect(send); wet.connect(out);
+  return { c, eq, sat, lp, wowDepth, flutterDepth, hiss, satAmt: -1, hp, djlp, dry, send, wet, conv: null, out };
+}
+/* fx: { eq, tape, filter, space, hiss }; on = false leaves the chain neutral */
+function applyChain(n, fx, on, immediate) {
+  const c = n.c, t = c.currentTime;
+  const to = (prm, v, tc) => immediate ? prm.setValueAtTime(v, t) : prm.setTargetAtTime(v, t, tc);
+  EQ_BANDS.forEach((b, i) => to(n.eq[i].gain, on ? clamp(fx.eq[b.key], -EQ_RANGE_DB, EQ_RANGE_DB) : 0, 0.03));
+  const amt = on ? clamp(fx.tape, 0, TAPE_MAX) / TAPE_MAX : 0;
+  if (n.satAmt !== amt) {
+    n.satAmt = amt;
+    if (amt === 0) n.sat.curve = null;
+    else {
+      const k = 1 + amt * 5, N = 1024, curve = new Float32Array(N), norm1 = Math.tanh(k);
+      for (let i = 0; i < N; i++) { const x = i / (N - 1) * 2 - 1; curve[i] = Math.tanh(k * x) / norm1 * (1 - amt * 0.12); }
+      n.sat.curve = curve;
+    }
+  }
+  to(n.lp.frequency, 20000 - amt * 13000, 0.05);
+  to(n.wowDepth.gain, amt * 0.0011, 0.1);
+  to(n.flutterDepth.gain, amt * 0.00012, 0.1);
+  to(n.hiss.gain, fx.hiss ? amt * 0.004 : 0, 0.05);
+  const f = on ? clamp(fx.filter || 0, -FILTER_RANGE, FILTER_RANGE) / FILTER_RANGE : 0, q = 0.7 + Math.abs(f) * 2.6;
+  to(n.djlp.frequency, f < 0 ? FILTER_OPEN_LP * Math.pow(FILTER_MIN_LP / FILTER_OPEN_LP, -f) : FILTER_OPEN_LP, 0.03);
+  to(n.hp.frequency, f > 0 ? FILTER_OPEN_HP * Math.pow(FILTER_MAX_HP / FILTER_OPEN_HP, f) : FILTER_OPEN_HP, 0.03);
+  to(n.djlp.Q, f < 0 ? q : 0.7, 0.03);
+  to(n.hp.Q, f > 0 ? q : 0.7, 0.03);
+  const sp = on ? clamp(fx.space || 0, 0, SPACE_MAX) / SPACE_MAX : 0;
+  if (sp > 0 && !n.conv) {
+    n.conv = c.createConvolver();
+    n.conv.buffer = makeImpulse(c);
+    n.send.connect(n.conv); n.conv.connect(n.wet);
+  }
+  to(n.send.gain, sp > 0 ? 1 : 0, 0.05);
+  to(n.wet.gain, sp * 0.9, 0.05);
+  to(n.dry.gain, 1 - sp * 0.3, 0.05);
+}
 const Engine = {
   decks: [], deck: 0, direct: null, out: null,
   ctx: null, an: null, master: null, nodes: null, graph: false,
@@ -3062,53 +3457,36 @@ const Engine = {
     try {
       this.ctx = c;
       const mix = c.createGain();
+      // pre-fader taps: the deck aligns its buffer to the element on these
+      this.tapEl = c.createAnalyser(); this.tapEl.fftSize = ALIGN_FFT;
+      this.tapBuf = c.createAnalyser(); this.tapBuf.fftSize = ALIGN_FFT;
       for (const d of this.decks) {
         const src = c.createMediaElementSource(d.el);
         d.gain = c.createGain();
         d.gain.gain.value = 0;
         src.connect(d.gain); d.gain.connect(mix);
+        src.connect(this.tapEl);
       }
       this.active().gain.gain.value = 1;
-      // 3-band EQ
-      let node = mix;
-      const eq = EQ_BANDS.map(b => {
-        const f = c.createBiquadFilter();
-        f.type = b.type; f.frequency.value = b.f; f.Q.value = b.q; f.gain.value = 0;
-        node.connect(f); node = f;
-        return f;
-      });
-      // tape: saturation → roll-off → wow & flutter (modulated delay) + hiss
-      const sat = c.createWaveShaper();
-      sat.oversample = '2x';
-      const lp = c.createBiquadFilter();
-      lp.type = 'lowpass'; lp.frequency.value = 20000; lp.Q.value = 0.5;
-      const wow = c.createDelay(0.05);
-      wow.delayTime.value = 0.006;
-      node.connect(sat); sat.connect(lp); lp.connect(wow);
-      const lfo = (hz) => { const o = c.createOscillator(), g = c.createGain(); o.frequency.value = hz; g.gain.value = 0; o.connect(g); g.connect(wow.delayTime); o.start(); return g; };
-      const wowDepth = lfo(0.55), flutterDepth = lfo(6.3);
-      const hissSrc = c.createBufferSource();
-      hissSrc.buffer = Snd.noise; hissSrc.loop = true;
-      const hissHp = c.createBiquadFilter();
-      hissHp.type = 'highpass'; hissHp.frequency.value = 3500;
-      const hiss = c.createGain();
-      hiss.gain.value = 0;
-      hissSrc.connect(hissHp); hissHp.connect(hiss); hissSrc.start();
-      const tapeOut = c.createGain();
-      wow.connect(tapeOut); hiss.connect(tapeOut);
+      // decks and the song buffer each get a pitch shifter; the buffer's also
+      // undoes its varispeed when the key is locked
+      const sum = c.createGain();
+      this.shiftMain = makeShifter(c);
+      mix.connect(this.shiftMain.input); this.shiftMain.output.connect(sum);
+      this.bufGain = c.createGain();
+      this.bufGain.gain.value = 0;
+      this.shiftBuf = makeShifter(c);
+      this.bufGain.connect(this.shiftBuf.input); this.shiftBuf.output.connect(sum);
+      this.nodes = buildChain(c, sum, Snd.noise);
       // analyser taps the processed music before the volume
       this.an = c.createAnalyser();
       this.an.fftSize = 2048;
       this.an.smoothingTimeConstant = 0.7;
-      tapeOut.connect(this.an);
+      this.nodes.out.connect(this.an);
       this.master = c.createGain();
-      tapeOut.connect(this.master);
-      // brick-wall-ish limiter: EQ boosts can never clip the output
-      const lim = c.createDynamicsCompressor();
-      lim.threshold.value = LIMIT_DB; lim.knee.value = 0; lim.ratio.value = 20;
-      lim.attack.value = 0.002; lim.release.value = 0.12;
+      this.nodes.out.connect(this.master);
+      const lim = makeLimiter(c);
       this.master.connect(lim); lim.connect(c.destination);
-      this.nodes = { eq, sat, lp, wowDepth, flutterDepth, hiss, satAmt: -1 };
       this.graph = true;
       this.applyVolume();
       this.applyFx();
@@ -3177,36 +3555,30 @@ const Engine = {
     g.linearRampToValueAtTime(0, t + ms / 1000);
   },
 
-  /* EQ in dB, tape 0–10 */
+  /* EQ in dB, tape 0–10, filter ±10, space 0–10, key in semitones */
   applyFx() {
     if (!this.nodes) return;
-    const n = this.nodes, t = this.ctx.currentTime;
-    EQ_BANDS.forEach((b, i) => n.eq[i].gain.setTargetAtTime(this.isDsp() ? clamp(S.set.eq[b.key], -EQ_RANGE_DB, EQ_RANGE_DB) : 0, t, 0.03));
-    const amt = this.isDsp() ? clamp(S.set.tape, 0, TAPE_MAX) / TAPE_MAX : 0;
-    if (n.satAmt !== amt) {
-      n.satAmt = amt;
-      if (amt === 0) n.sat.curve = null;
-      else {
-        const k = 1 + amt * 5, N = 1024, curve = new Float32Array(N), norm1 = Math.tanh(k);
-        for (let i = 0; i < N; i++) { const x = i / (N - 1) * 2 - 1; curve[i] = Math.tanh(k * x) / norm1 * (1 - amt * 0.12); }
-        n.sat.curve = curve;
-      }
-    }
-    n.lp.frequency.setTargetAtTime(20000 - amt * 13000, t, 0.05);
-    n.wowDepth.gain.setTargetAtTime(amt * 0.0011, t, 0.1);
-    n.flutterDepth.gain.setTargetAtTime(amt * 0.00012, t, 0.1);
-    n.hiss.gain.setTargetAtTime(S.playing ? amt * 0.004 : 0, t, 0.05);
+    const dsp = this.isDsp(), t = this.ctx.currentTime, key = dsp ? S.set.key || 0 : 0;
+    applyChain(this.nodes, { eq: S.set.eq, tape: S.set.tape, filter: S.filter, space: S.set.space, hiss: S.playing }, dsp);
+    this.shiftMain.set(key, t);
+    // the buffer is resampled, so its pitch follows the speed: undo that when the key is locked
+    this.shiftBuf.set(key + (S.set.lock !== false ? -12 * Math.log2(Deck.rate || 1) : 0), t);
   },
 
+  /* key lock: the element keeps the pitch while the speed changes; tape: it doesn't */
   setRate(r) {
+    const keep = S.set.lock !== false;
     for (const a of this.elements()) {
-      try { a.defaultPlaybackRate = r; a.playbackRate = r; a.preservesPitch = true; a.webkitPreservesPitch = true; } catch (e) {}
+      try { a.defaultPlaybackRate = r; a.playbackRate = r; a.preservesPitch = keep; a.webkitPreservesPitch = keep; } catch (e) {}
     }
+    Deck.setRate(r);
+    this.applyFx();
   },
 
   /* load into the audible path (cancels any running crossfade) */
   load(url) {
     this.cancelCrossfade();
+    Deck.release();
     if (this.isDsp()) {
       const d = this.active(), o = this.other();
       this.out = d.el;                              // whatever is loaded is what we hear
@@ -3241,6 +3613,7 @@ const Engine = {
     from.gain.gain.cancelScheduledValues(t); to.gain.gain.cancelScheduledValues(t);
     from.gain.gain.setValueCurveAtTime(fadeOut, t, dur);
     to.gain.gain.setValueCurveAtTime(fadeIn, t, dur);
+    Deck.fadeOut(t, dur);                            // a song playing from its buffer fades the same way
     this.deck = 1 - this.deck;
     this.out = to.el;                                // events now come from the new deck
     this.xfading = true;
@@ -3271,22 +3644,28 @@ const Engine = {
     const c = this.ctx;
     if (c && c.state !== 'running') c.resume().catch(() => {});
     this.applyVolume();
-    if (this.isDsp() && !this.xfading) this.active().gain.gain.setValueAtTime(1, c ? c.currentTime : 0);
+    if (Deck.on) { Deck.resume(); return Promise.resolve(); }
+    if (this.isDsp() && !this.xfading && c) holdAt(this.active().gain.gain, 1);
     const p = this.out.play();
     this.sync(true);
     return p;
   },
   pause() {
     this.cancelCrossfade();
+    if (Deck.on && !Deck.waiting()) { Deck.suspend(); return; }
+    if (Deck.on) Deck.release();
     this.out.pause();
     if (!this.isDsp() && !this.decks[0].el.paused) this.decks[0].el.pause();
   },
   seek(t) {
     this.cancelCrossfade();
+    if (Deck.on && !Deck.waiting()) return Deck.seek(t);
+    if (Deck.on) Deck.release();
     try { this.out.currentTime = t; } catch (e) {}
     if (!this.isDsp()) try { this.decks[0].el.currentTime = t; } catch (e) {}
   },
-  get time() { return this.out.currentTime || 0; },
+  get time() { return Deck.on ? Deck.pos() : this.out.currentTime || 0; },
+  get duration() { return Deck.on && Deck.buf ? Deck.buf.duration : this.out.duration; },
 
   /* keep the silent analysis shadow near the audible element (DIRECT) */
   sync(force) {
@@ -3307,13 +3686,14 @@ const Engine = {
   },
   analysing() {
     if (!this.graph) return false;
-    return this.isDsp() ? !this.active().el.paused : !this.decks[0].el.paused && !document.hidden;
+    return this.isDsp() ? !this.active().el.paused || (Deck.on && Deck.running) : !this.decks[0].el.paused && !document.hidden;
   },
 
   setOut(mode) {
     mode = mode === 'direct' ? 'direct' : 'dsp';
     if ((mode === 'dsp') === this.isDsp()) { S.set.out = mode; commit(); return; }
-    const prev = this.out, t = prev.currentTime || 0, src = prev.getAttribute('src'), wasPlaying = S.playing;
+    const prev = this.out, t = this.time, src = prev.getAttribute('src'), wasPlaying = S.playing;
+    Deck.release();
     Player.quietUntil = now() + 600;              // swallow the pause from the hand-over
     this.cancelCrossfade();
     for (const a of this.elements()) a.pause();
@@ -3429,6 +3809,488 @@ VIEWS.fx = {
   long: c => FX.reset(FX_COLS[c.arg.col]),
 };
 
+
+/* ---------- 21c. deck: the song as an instrument --------------------------
+   PITCH, FILTER, SPACE and beat LOOPs, plus RENDER. Loops need sample
+   accuracy, which an <audio> element can't give: the song is decoded once
+   and, from its first loop on, plays from that buffer. The hand-over is
+   aligned on the sound itself (a muted probe is cross-correlated with the
+   element) and crossfaded in 12 ms, so it can't be heard.                 */
+const LOOP_STEPS = [0, 0.25, 0.5, 1, 2, 4, 8, 16, 32];
+const KEY_RANGE = 12, FILTER_RANGE = 10, SPACE_MAX = 10;
+const ALIGN_FFT = 32768, ALIGN_WAIT_MS = 820, ALIGN_MAX_S = 0.25, ALIGN_AGREE_S = 0.002, HANDOVER_S = 0.012, BEAT_EARLY_S = 0.04;
+const sleepMs = ms => new Promise(r => setTimeout(r, ms));
+/* gain automation that can't throw when a short fade is still running */
+function holdAt(prm, v) { try { prm.cancelScheduledValues(0); prm.setValueAtTime(v, Engine.ctx.currentTime); } catch (e) { prm.value = v; } }
+function curveAt(prm, curve, t, dur) { try { prm.cancelScheduledValues(0); prm.setValueCurveAtTime(curve, t, dur); } catch (e) { prm.value = curve[curve.length - 1]; } }
+const beatLen = tr => (tr && tr.bpm ? 60 / tr.bpm : 0.5);       // no tempo: loops count half seconds
+const fmtBeats = b => (b === 0.25 ? '1/4' : b === 0.5 ? '1/2' : String(b));
+
+/* how far (s) audio B runs behind audio A, from two analyser snapshots:
+   a coarse search on 4× decimated audio, refined at the full rate. null if
+   the two don't really match (silence, or a different pitch).            */
+function measureLag(tapA, tapB, sr) {
+  const N = tapA.fftSize, a = new Float32Array(N), b = new Float32Array(N);
+  tapA.getFloatTimeDomainData(a); tapB.getFloatTimeDomainData(b);
+  const D = 8, M = (N / D) | 0, ad = new Float32Array(M), bd = new Float32Array(M);
+  for (let i = 0; i < M; i++) { let x = 0, y = 0; for (let k = 0; k < D; k++) { x += a[i * D + k]; y += b[i * D + k]; } ad[i] = x; bd[i] = y; }
+  const maxL = Math.min((M / 3) | 0, Math.round(ALIGN_MAX_S * sr / D));
+  let best = -Infinity, bestL = 0;
+  for (let L = -maxL; L <= maxL; L++) {
+    let sum = 0;
+    for (let i = maxL; i < M - maxL; i++) sum += bd[i] * ad[i - L];
+    if (sum > best) { best = sum; bestL = L; }
+  }
+  let ea = 0, eb = 0;
+  for (let i = maxL; i < M - maxL; i++) { eb += bd[i] * bd[i]; ea += ad[i - bestL] * ad[i - bestL]; }
+  if (!(ea > 1e-6 && eb > 1e-6) || best / Math.sqrt(ea * eb) < 0.6) return null;
+  const m = maxL * D;
+  let best2 = -Infinity, L2 = bestL * D;
+  for (let L = bestL * D - D; L <= bestL * D + D; L++) {
+    let sum = 0;
+    for (let i = m; i < N - m; i++) sum += b[i] * a[i - L];
+    if (sum > best2) { best2 = sum; L2 = L; }
+  }
+  return L2 / sr;
+}
+
+/* tempo: an onset curve (log energy rises in 8 ms hops), its autocorrelation
+   for a first guess between 60 and 200 BPM (leaning toward 120), then a comb
+   over period and phase refines both. { bpm, beat0 } or null.             */
+function onsets(chans, sr, i0, i1, hop) {
+  const n = Math.max(0, Math.floor((i1 - i0) / hop) - 1), env = new Float32Array(n), on = new Float32Array(n);
+  for (let f = 0; f < n; f++) {
+    let e = 0;
+    const o = i0 + f * hop;
+    for (let i = 0; i < hop * 2; i++) { let v = 0; for (const d of chans) v += d[o + i] || 0; e += v * v; }
+    env[f] = Math.log(1e-6 + e);
+  }
+  for (let f = 1; f < n; f++) on[f] = Math.max(0, env[f] - env[f - 1]);
+  return on;
+}
+function combScore(on, P, ph) {
+  let s = 0, k = 0;
+  for (let x = ph; x < on.length - 1; x += P, k++) { const i = x | 0, fr = x - i; s += on[i] * (1 - fr) + on[i + 1] * fr; }
+  return k ? s / k : 0;
+}
+function detectTempo(chans, sr) {
+  const hop = Math.max(1, Math.round(sr / 125)), fps = sr / hop;
+  const on = onsets(chans, sr, 0, chans[0].length, hop), n = on.length;
+  if (n < fps * 8) return null;                            // under 8 s: nothing to judge
+  const lo = Math.floor(fps * 60 / 200), hi = Math.ceil(fps * 60 / 60), acf = new Float32Array(hi + 2);
+  for (let L = lo; L <= hi; L++) { let sum = 0; for (let f = L; f < n; f++) sum += on[f] * on[f - L]; acf[L] = sum / (n - L); }
+  let best = 0, bestL = 0;
+  for (let L = lo; L <= hi; L++) {
+    const w = Math.exp(-0.5 * Math.pow(Math.log2(60 * fps / L / 120) / 0.8, 2));
+    if (acf[L] * w > best) { best = acf[L] * w; bestL = L; }
+  }
+  if (!bestL) return null;
+  let bP = bestL, bPh = 0, bS = -1;
+  for (let P = bestL * 0.98; P <= bestL * 1.02; P += bestL * 0.0015)
+    for (let ph = 0; ph < P; ph += 0.5) { const sc = combScore(on, P, ph); if (sc > bS) { bS = sc; bP = P; bPh = ph; } }
+  if (!(bS > combScore(on, bP, (bPh + bP / 2) % bP) * 1.1)) return null;   // no clear beat
+  let bpm = 60 * fps / bP;
+  if (Math.abs(bpm - Math.round(bpm)) < 0.12) bpm = Math.round(bpm);
+  return { bpm: Math.round(bpm * 100) / 100, beat0: (bPh + 1) * hop / sr };
+}
+function analyseTempo(tr, chans, sr) {
+  let r = null;
+  try { r = detectTempo(chans, sr); } catch (e) {}
+  tr.bpm = r ? r.bpm : 0; tr.beat0 = r ? r.beat0 : 0;      // 0 = looked, found no steady beat
+  if (r) tr.bpmAuto = r.bpm;
+  DB.putMeta(tr).catch(() => {});
+  LCD.dirty = true; wake();
+}
+const chansOf = b => { const c = []; for (let i = 0; i < b.numberOfChannels; i++) c.push(b.getChannelData(i)); return c; };
+/* where a loop starts: the beat at or just before t, phased on the music
+   around t (so a slightly wandering live tempo still lands on the beat)  */
+function beatStart(buf, tr, t) {
+  if (!tr.bpm) return t;
+  const P = 60 / tr.bpm, sr = buf.sampleRate, hop = Math.max(1, Math.round(sr / 500));
+  const t0 = Math.max(0, t - 4), on = onsets(chansOf(buf), sr, Math.floor(t0 * sr), Math.floor(Math.min(buf.duration, t + 0.2) * sr), hop);
+  const Pf = P * sr / hop;
+  let first = (tr.beat0 || 0);
+  if (on.length > Pf * 2) {
+    let bS = -1, bPh = 0;
+    for (let ph = 0; ph < Pf; ph += 1) { const sc = combScore(on, Pf, ph); if (sc > bS) { bS = sc; bPh = ph; } }
+    if (bS > combScore(on, Pf, (bPh + Pf / 2) % Pf) * 1.1) first = t0 + (bPh + 1) * hop / sr;
+  }
+  return Math.max(0, first + Math.floor((t + BEAT_EARLY_S - first) / P) * P);
+}
+
+const NO_LOOP = () => ({ beats: 0, a: 0, b: 0, arming: false });
+const Deck = {
+  buf: null, bufId: null, loading: null, loadingId: null,
+  src: null, on: false, running: false, t0: 0, off0: 0, rate: 1, token: 0, waitEl: 0, aligned: null,
+  loop: NO_LOOP(),
+  dur() { return this.buf ? this.buf.duration : S.dur || 0; },
+  /* scheduled to take over at the loop's end; the element is still the sound */
+  waiting() { return !!this.waitEl && Engine.ctx.currentTime < this.waitEl; },
+  /* song position: off0 + elapsed × rate, folded into the loop once it wraps */
+  raw() { return this.off0 + (this.running ? Math.max(0, Engine.ctx.currentTime - this.t0) * this.rate : 0); },
+  pos() {
+    if (this.waitEl && Engine.ctx.currentTime < this.waitEl) return Engine.out.currentTime;
+    const r = this.raw(), { a, b } = this.loop, L = b - a;
+    if (this.src && this.src.loop && L > 0 && r >= b) return a + ((r - a) % L);
+    return Math.min(r, this.dur());
+  },
+  rebase() { this.off0 = this.pos(); this.t0 = Engine.ctx.currentTime; },
+  /* the full-rate decode of the current song, kept for that song only */
+  load(tr) {
+    if (this.bufId === tr.id && this.buf) return Promise.resolve(this.buf);
+    if (this.loading && this.loadingId === tr.id) return this.loading;
+    this.loadingId = tr.id;
+    const job = (async () => {
+      const blob = await DB.get('blobs', tr.id);
+      if (!blob) throw new Error('missing');
+      const b = await decodeIn(Engine.ctx, await blob.arrayBuffer());
+      if (this.loadingId === tr.id) { this.buf = b; this.bufId = tr.id; }
+      if (tr.bpm == null) analyseTempo(tr, chansOf(b), b.sampleRate);   // a loop has to know the beat
+      return b;
+    })();
+    this.loading = job;
+    job.then(() => { if (this.loading === job) this.loading = null; }, () => { if (this.loading === job) this.loading = null; });
+    return job;
+  },
+  prepare() { const tr = Player.cur(); if (tr && Engine.isDsp() && Engine.graph) this.load(tr).catch(() => {}); },
+  /* (re)start the buffer at `offset`, keeping the loop */
+  start(offset, when) {
+    const c = Engine.ctx, t = when || c.currentTime + 0.004, s = c.createBufferSource();
+    s.buffer = this.buf;
+    s.playbackRate.value = this.rate;
+    const { a, b, beats, arming } = this.loop;
+    if (beats && !arming) { s.loopStart = a; s.loopEnd = b; s.loop = true; }
+    s.connect(Engine.bufGain); s.connect(Engine.tapBuf);
+    s.onended = () => { if (s === this.src && this.running && !s.loop) this.ended(); };
+    s.start(t, clamp(offset, 0, Math.max(0, this.buf.duration - 0.001)));
+    const old = this.src;
+    if (old) { old.onended = null; try { old.stop(t); } catch (e) {} }
+    this.src = s; this.t0 = t; this.off0 = offset; this.running = true;
+  },
+  stopSrc() {
+    if (this.src) { this.src.onended = null; try { this.src.stop(); } catch (e) {} }
+    this.src = null; this.running = false;
+  },
+  /* element → buffer. A muted probe runs from where the element says it is;
+     two cross-correlations 80 ms apart must agree on the true offset. Then
+     the switch happens right away, in phase. If they don't agree (some
+     players feed Web Audio unevenly), the element plays on to the loop's
+     end and the buffer takes over at its start: a jump the loop makes
+     anyway, so no in-between step can be heard.                          */
+  async takeOver(tok) {
+    const c = Engine.ctx, el = Engine.out, cancelled = () => tok !== this.token || !this.src;
+    const bail = () => { if (this.on && Engine.out === el && !el.paused) { this.stopSrc(); this.on = false; } return false; };
+    Engine.cancelCrossfade();
+    this.rate = S.set.speed || 1;
+    holdAt(Engine.bufGain.gain, 0);
+    this.on = true;
+    this.start(el.currentTime + 0.02 * this.rate, c.currentTime + 0.02);
+    Engine.applyFx();
+    await sleepMs(ALIGN_WAIT_MS);
+    if (cancelled()) return bail();
+    const l1 = measureLag(Engine.tapEl, Engine.tapBuf, c.sampleRate);
+    await sleepMs(80);
+    if (cancelled()) return bail();
+    const l2 = l1 == null ? null : measureLag(Engine.tapEl, Engine.tapBuf, c.sampleRate);
+    const lag = l2 != null && Math.abs(l1 - l2) <= ALIGN_AGREE_S ? l2 : null;
+    let t = c.currentTime + 0.01;
+    const est = el.currentTime + 0.01 * this.rate, { a, b, beats } = this.loop;
+    if (lag != null) this.start(this.raw() + lag * this.rate);
+    else if (beats && est < b - 0.05) {             // hand over exactly where the loop jumps back
+      t = c.currentTime + (b - est) / this.rate;
+      this.loop.arming = false;
+      this.waitEl = t;
+      this.start(a, t);
+    } else this.start(est, t);
+    const N = 16, fin = new Float32Array(N), fout = new Float32Array(N);
+    for (let i = 0; i < N; i++) { const x = i / (N - 1); fin[i] = Math.sin(x * Math.PI / 2); fout[i] = Math.cos(x * Math.PI / 2); }
+    curveAt(Engine.active().gain.gain, fout, t, HANDOVER_S);
+    curveAt(Engine.bufGain.gain, fin, t, HANDOVER_S);
+    this.aligned = lag != null ? Math.round(lag * 1000) / 1000 : this.waitEl ? 'at loop end' : 'estimate';
+    setTimeout(() => { this.waitEl = 0; if (this.on && Engine.out === el) { Player.quietUntil = now() + 600; el.pause(); } }, ((t - c.currentTime) + HANDOVER_S + 0.06) * 1000);
+    return true;
+  },
+  async setLoop(beats) {
+    if (!beats) return this.loopOff();
+    const tr = Player.cur();
+    if (!tr) { Snd.err(); return; }
+    if (!Engine.isDsp() || !Engine.graph) { toast('LOOP NEEDS DSP OUT', 'SETTINGS › AUDIO › OUTPUT', 1500); Snd.err(); return; }
+    if (this.loop.arming) { this.loop.beats = beats; commit(); return; }   // still decoding: keep the latest choice
+    if (this.waiting()) { this.release(); return this.setLoop(beats); }  // not handed over yet: start again with the new size
+    if (this.loop.beats && this.src) {                                    // resize from the same start
+      this.rebase();
+      const b = Math.min(this.loop.a + beats * beatLen(tr), this.dur() - 0.01), p = this.off0;
+      this.loop.beats = beats; this.loop.b = b;
+      if (p >= b) this.start(this.loop.a + ((p - this.loop.a) % (b - this.loop.a)));
+      else this.src.loopEnd = b;
+      commit();
+      return;
+    }
+    if (!S.playing) { toast('LOOP NEEDS PLAY', 'PRESS 08 FIRST', 1200); Snd.err(); return; }
+    const t = Engine.time, tok = ++this.token;
+    this.loop = { beats, a: t, b: t + beats * beatLen(tr), arming: true };
+    commit();
+    let buf;
+    try { buf = await this.load(tr); }
+    catch (e) {
+      if (tok === this.token) { this.loop = NO_LOOP(); fault('LOOP FAILED', 'THE SONG COULD NOT BE DECODED', 'TRY ANOTHER SONG'); }
+      return;
+    }
+    if (tok !== this.token) return;
+    if (Player.cur() !== tr || !S.playing) { this.loop = NO_LOOP(); commit(); return; }
+    const a = beatStart(buf, tr, t);
+    this.loop.a = a; this.loop.b = Math.min(a + this.loop.beats * beatLen(tr), buf.duration - 0.01);
+    if (!this.on && !(await this.takeOver(tok))) return;
+    if (tok !== this.token) return;
+    this.loop.arming = false;
+    if (!this.waitEl) {
+      this.rebase();
+      const p = this.off0, A = this.loop.a, B = this.loop.b;
+      if (p >= B) this.start(A + ((p - A) % (B - A)));
+      else { this.src.loopStart = A; this.src.loopEnd = B; this.src.loop = true; }
+    }
+    Snd.blip(1760, 0.02, 0.06);
+    commit();
+  },
+  loopOff() {
+    this.token++;
+    if (this.waitEl) { this.waitEl = 0; this.release(); commit(); return; }   // not handed over yet: just stay on the element
+    if (this.src && this.loop.beats && !this.loop.arming) { this.rebase(); this.src.loop = false; }
+    this.loop = NO_LOOP();
+    commit();
+  },
+  /* transport while the song plays from its buffer */
+  suspend() { if (!this.on) return; this.rebase(); this.stopSrc(); },
+  resume() {
+    if (!this.on || !this.buf) return;
+    holdAt(Engine.bufGain.gain, 1);
+    this.start(this.off0 >= this.dur() - 0.01 ? 0 : this.off0);
+  },
+  seek(t) {
+    if (!this.on) return;
+    const { a, b, beats } = this.loop;
+    if (beats && (t < a - 0.01 || t > b + 0.01)) { this.token++; this.loop = NO_LOOP(); }   // seeking out of a loop leaves it
+    t = clamp(t, 0, Math.max(0, this.dur() - 0.01));
+    if (this.running) this.start(t); else { this.off0 = t; }
+    commit();
+  },
+  setRate(r) {
+    if (this.waiting()) { this.release(); commit(); }  // re-timing a pending hand-over isn't worth it: stay on the element
+    if (this.on && this.src) { this.rebase(); this.src.playbackRate.setValueAtTime(r, Engine.ctx.currentTime); }
+    this.rate = r;
+  },
+  /* the buffer has no timeupdate: feed the same bookkeeping */
+  tick() {
+    const t = this.pos();
+    S.t = t;
+    if (!Player.counted && t >= RECENT_AFTER_S) { Player.counted = true; Library.markPlayed(Player.cur()); }
+    Sleep.check();
+    MS.position();
+  },
+  ended() { this.running = false; this.off0 = this.dur(); Player.onMedia('ended', Engine.out); },
+  /* the next song crossfades in: the buffer fades out like a deck would */
+  fadeOut(t, dur) {
+    if (!this.on) return;
+    const N = 32, f = new Float32Array(N);
+    for (let i = 0; i < N; i++) f[i] = Math.cos(i / (N - 1) * Math.PI / 2);
+    curveAt(Engine.bufGain.gain, f, t, dur);
+    const s = this.src;
+    if (s) { s.onended = null; try { s.stop(t + dur + 0.02); } catch (e) {} }
+    this.src = null; this.on = false; this.running = false; this.loop = NO_LOOP(); this.token++;
+    setTimeout(() => { if (!this.on && this.bufId !== (Player.cur() || {}).id) { this.buf = null; this.bufId = null; } }, (dur + 0.3) * 1000);
+  },
+  /* another song (or DIRECT out): back to the element */
+  release() {
+    this.token++;
+    if (this.on) {
+      const waiting = this.waitEl && Engine.ctx.currentTime < this.waitEl;
+      this.stopSrc();
+      this.on = false;
+      if (Engine.bufGain) holdAt(Engine.bufGain.gain, 0);
+      if (waiting) holdAt(Engine.active().gain.gain, 1);   // the element never handed over: keep it audible
+    }
+    this.waitEl = 0;
+    this.loop = NO_LOOP();
+    const tr = Player.cur();
+    if (this.bufId && (!tr || tr.id !== this.bufId)) { this.buf = null; this.bufId = null; }
+  },
+};
+
+/* the deck's controls: hold 03–06 and turn 10, or the DECK page */
+const DECK_PRESETS = {
+  slowed:    { label: 'SLOWED',    set: { speed: 0.8, lock: false, key: 0, space: 5 } },
+  nightcore: { label: 'NIGHTCORE', set: { speed: 1.25, lock: false, key: 0, space: 0 } },
+  flat:      { label: 'FLAT',      set: { speed: 1, lock: true, key: 0, space: 0 } },
+};
+const DeckUI = {
+  needDsp() {
+    if (Engine.isDsp() && Engine.graph) return false;
+    toast('NEEDS DSP OUT', 'SETTINGS › AUDIO › OUTPUT', 1400); Snd.err();
+    return true;
+  },
+  value(p) {
+    if (p === 'key') return S.set.key || 0;
+    if (p === 'filter') return S.filter || 0;
+    if (p === 'space') return S.set.space || 0;
+    if (p === 'loop') return Deck.loop.beats;
+    return 0;
+  },
+  turn(p, dir) {
+    if (this.needDsp()) return;
+    const end = () => { Snd.blip(420, 0.02, 0.05); overlay('param', p, null, 1400); };
+    if (p === 'loop') {
+      const i = Math.max(0, LOOP_STEPS.indexOf(Deck.loop.beats)), j = clamp(i + dir, 0, LOOP_STEPS.length - 1);
+      if (j === i) return end();
+      Deck.setLoop(LOOP_STEPS[j]);
+    } else {
+      const lim = p === 'key' ? [-KEY_RANGE, KEY_RANGE] : p === 'filter' ? [-FILTER_RANGE, FILTER_RANGE] : [0, SPACE_MAX];
+      const v = this.value(p), n = clamp(v + dir, lim[0], lim[1]);
+      if (n === v) return end();
+      if (p === 'key') S.set.key = n; else if (p === 'filter') S.filter = n; else S.set.space = n;
+      Engine.applyFx();
+    }
+    overlay('param', p, null, 1400);
+    commit();
+  },
+  reset(p) {
+    if (p === 'loop') Deck.setLoop(0);
+    else { if (p === 'key') S.set.key = 0; else if (p === 'filter') S.filter = 0; else S.set.space = 0; Engine.applyFx(); }
+    Snd.blip(880, 0.03, 0.08);
+    overlay('param', p, null, 1000);
+    commit();
+  },
+  hint(p) { overlay('param', p, 'hint', 60000); },
+  open() { Nav.open('deck', { arg: { col: 0 } }); },
+  preset(id) {
+    if (this.needDsp()) return;
+    const ps = DECK_PRESETS[id];
+    Object.assign(S.set, ps.set);
+    if (id === 'flat') { S.filter = 0; Deck.setLoop(0); }
+    Engine.setRate(S.set.speed);
+    toast(ps.label, id === 'flat' ? 'EVERYTHING BACK TO NORMAL' : `${fmtSpeed(S.set.speed)} · ${S.set.lock ? 'KEY LOCK' : 'TAPE'}${S.set.space ? ' · SPACE ' + S.set.space : ''}`, 1300);
+    commit();
+  },
+  toggleLock() {
+    S.set.lock = !S.set.lock;
+    Engine.setRate(S.set.speed);
+    toast(S.set.lock ? 'KEY LOCK' : 'TAPE', S.set.lock ? 'SPEED KEEPS THE PITCH' : 'PITCH FOLLOWS THE SPEED', 1200);
+    commit();
+  },
+  /* what the deck is doing, for chips and speech; [] when nothing is changed */
+  parts() {
+    const out = [], tr = Player.cur();
+    if (S.set.speed !== 1) out.push((S.set.lock ? '' : 'TAPE ') + fmtSpeed(S.set.speed));
+    if (S.set.key) out.push(`${S.set.key > 0 ? '+' : ''}${S.set.key} ST`);
+    if (S.filter) out.push(`FILTER ${S.filter > 0 ? '+' : ''}${S.filter}`);
+    if (S.set.space) out.push(`SPACE ${S.set.space}`);
+    if (Deck.loop.beats) out.push(`LOOP ${fmtBeats(Deck.loop.beats)}${tr && tr.bpm ? '' : ' × ½S'}`);
+    return out;
+  },
+};
+
+/* DECK page: six faders (speed, pitch, filter, space, loop, tempo) and a row of
+   buttons. Turn to pick, push to edit or act, hold to reset a fader.     */
+const DECK_COLS = [
+  { key: 'speed', label: 'SPEED' }, { key: 'key', label: 'PITCH' }, { key: 'filter', label: 'FILTER' },
+  { key: 'space', label: 'SPACE' }, { key: 'loop', label: 'LOOP' }, { key: 'bpm', label: 'BPM' },
+];
+const DECK_BTNS = [
+  { key: 'lock', label: () => (S.set.lock ? 'LOCK' : 'TAPE'), act: () => DeckUI.toggleLock() },
+  { key: 'slowed', label: () => 'SLOWED', act: () => DeckUI.preset('slowed') },
+  { key: 'nightcore', label: () => 'NIGHTCORE', act: () => DeckUI.preset('nightcore') },
+  { key: 'flat', label: () => 'FLAT', act: () => DeckUI.preset('flat') },
+  { key: 'render', label: () => 'RENDER', act: () => Render.run() },
+];
+const DeckPage = {
+  pos(col) {          // 0..1 fader position
+    const tr = Player.cur();
+    switch (col.key) {
+      case 'speed': return Math.max(0, SPEEDS.indexOf(S.set.speed)) / (SPEEDS.length - 1);
+      case 'key': return ((S.set.key || 0) + KEY_RANGE) / (2 * KEY_RANGE);
+      case 'filter': return (S.filter + FILTER_RANGE) / (2 * FILTER_RANGE);
+      case 'space': return (S.set.space || 0) / SPACE_MAX;
+      case 'loop': return Math.max(0, LOOP_STEPS.indexOf(Deck.loop.beats)) / (LOOP_STEPS.length - 1);
+      case 'bpm': return tr && tr.bpm ? clamp((tr.bpm * S.set.speed - 60) / 140, 0, 1) : 0;
+    }
+    return 0;
+  },
+  bipolar: k => k === 'key' || k === 'filter',
+  label(col) {
+    const tr = Player.cur();
+    switch (col.key) {
+      case 'speed': return fmtSpeed(S.set.speed);
+      case 'key': return S.set.key ? (S.set.key > 0 ? '+' : '') + S.set.key : '0';
+      case 'filter': return S.filter ? (S.filter < 0 ? 'LP' : 'HP') + Math.abs(S.filter) : 'OPEN';
+      case 'space': return S.set.space ? String(S.set.space) : 'DRY';
+      case 'loop': return Deck.loop.beats ? fmtBeats(Deck.loop.beats) : 'OFF';
+      case 'bpm': return tr && tr.bpm ? String(Math.round(tr.bpm * S.set.speed)) : '--';
+    }
+    return '';
+  },
+  step(col, dir) {
+    if (col.key === 'speed') return Player.nudgeSpeed(dir);
+    if (col.key === 'bpm') {
+      const tr = Player.cur();
+      if (!tr || !tr.bpm) return Snd.blip(420, 0.02, 0.05);
+      tr.bpm = clamp(Math.round(tr.bpm) + dir, 40, 240); DB.putMeta(tr).catch(() => {});
+      overlay('param', 'loop', null, 900); return commit();
+    }
+    DeckUI.turn(col.key, dir);
+  },
+  reset(col) {
+    if (col.key === 'speed') return Player.setSpeed(1);
+    if (col.key === 'bpm') { const tr = Player.cur(); if (tr && tr.bpmAuto) { tr.bpm = tr.bpmAuto; DB.putMeta(tr).catch(() => {}); toast('BPM', 'BACK TO DETECTED', 900); commit(); } return; }
+    DeckUI.reset(col.key);
+  },
+  draw(c, t) {
+    const dsp = Engine.isDsp(), sel = c.arg.col, edit = c.mode === 'edit';
+    text('DECK', 0, 1, F3, INK.LIT);
+    text(S.set.lock ? 'KEY LOCK' : 'TAPE', 20, 1, F3, S.set.lock ? INK.DIM : INK.ACC);
+    textR(dsp ? (Deck.on ? 'BUFFER' : 'STREAM') : 'DIRECT: NOT IN CHAIN', 159, 1, F3, dsp ? INK.DIM : INK.ACC);
+    dots(0, 8, LW, INK.DIM, 2);
+    const W = 26, top = 21, h = 34;
+    DECK_COLS.forEach((col, i) => {
+      const x = 2 + i * W, cx = x + 12, on = i === sel, ed = on && edit;
+      const blink = ed && !REDUCED.matches && (t % 600) < 300;
+      if (on) rect(x, 11, W - 2, 8, ed ? INK.ACC : INK.LIT);
+      textC(col.label, cx, 12, F3, on ? INK.OFF : INK.DIM);
+      vline(cx, top, h, INK.DIM);
+      for (let k = 0; k <= 4; k++) hline(cx - 2, top + Math.round(k * (h - 1) / 4), k === 2 && this.bipolar(col.key) ? 5 : 2, INK.DIM);
+      const y = top + Math.round((1 - this.pos(col)) * (h - 1));
+      if (this.bipolar(col.key)) { const y0 = top + Math.round((h - 1) / 2); vline(cx, Math.min(y, y0), Math.abs(y - y0) + 1, INK.LIT); }
+      else vline(cx, y, top + h - y, INK.LIT);
+      rect(cx - 4, y - 1, 9, 3, blink ? INK.OFF : (on ? INK.ACC : INK.LIT));
+      textC(this.label(col), cx, top + h + 3, F3, on ? INK.LIT : INK.DIM);
+    });
+    // buttons
+    let x = 1;
+    DECK_BTNS.forEach((b, i) => {
+      const lab = b.label(), w = textW(lab, F3) + 5, on = sel === DECK_COLS.length + i;
+      if (on) rect(x, 71, w, 9, INK.LIT); else frameRect(x, 71, w, 9, INK.DIM);
+      text(lab, x + 3, 73, F3, on ? INK.OFF : (b.key === 'render' ? INK.ACC : INK.LIT));
+      x += w + 3;
+    });
+    const hintTxt = sel >= DECK_COLS.length ? 'PUSH 10 = ' + DECK_BTNS[sel - DECK_COLS.length].label() : edit ? 'TURN CHANGES · PUSH DONE' : 'TURN PICK · PUSH EDIT · HOLD RESET';
+    textC(hintTxt, LW / 2, 85, F3, INK.DIM);
+    return edit || (Deck.loop.arming && (t % 500) < 250);
+  },
+};
+VIEWS.deck = {
+  title: 'DECK',
+  items: () => DECK_COLS.map(col => ({ label: col.label, value: DeckPage.label(col) })).concat(DECK_BTNS.map(b => ({ label: b.label(), value: 'button' }))),
+  turn: (c, dir) => {
+    if (c.mode === 'edit') return DeckPage.step(DECK_COLS[c.arg.col], dir);
+    const n = clamp(c.arg.col + dir, 0, DECK_COLS.length + DECK_BTNS.length - 1);
+    if (n === c.arg.col) return Snd.blip(420, 0.02, 0.05);
+    c.arg.col = n; commit(); Access.announce();
+  },
+  push: c => {
+    if (c.arg.col >= DECK_COLS.length) return DECK_BTNS[c.arg.col - DECK_COLS.length].act();
+    c.mode = c.mode === 'edit' ? null : 'edit'; commit(); Access.announce();
+  },
+  long: c => { if (c.arg.col < DECK_COLS.length) DeckPage.reset(DECK_COLS[c.arg.col]); },
+};
+
 /* ---------- 22. player: queue, transport, shuffle/repeat ---------------- */
 const Player = {
   urls: new Map(), order: [], pos: 0, counted: false, token: 0, pendingSeek: 0, quietUntil: 0, wantPause: false, want: false,
@@ -3493,10 +4355,12 @@ const Player = {
   /* crossfade (or gapless micro-fade) into the next song before this ends */
   tick() {
     if (!S.playing || Engine.xfading || !Engine.isDsp() || !Engine.graph) return;
+    if (Deck.on && Deck.running) Deck.tick();
+    if (Deck.loop.beats) return;                      // a loop never reaches the end
     if (S.repeat === 2 || S.sleepUntil === 'eot' || Sleep.fading) return;
-    const a = Engine.out, d = a.duration;
+    const d = Engine.duration;
     if (!isFinite(d) || d < 4) return;
-    const left = (d - a.currentTime) / (a.playbackRate || 1);
+    const left = (d - Engine.time) / (S.set.speed || 1);
     const xf = S.set.xfade || 0;
     const lead = xf > 0 ? Math.min(xf, d / 3) : GAPLESS_LEAD_S;
     if (left > lead || left <= 0) return;
@@ -3643,7 +4507,7 @@ const Player = {
     this.load(n, { play: S.playing });
   },
   seek(t) {
-    const d = S.dur || Engine.out.duration || 0;
+    const d = S.dur || Engine.duration || 0;
     t = clamp(t, 0, d ? Math.max(0, d - 0.25) : t);
     Engine.seek(t);
     S.t = t;
@@ -3958,7 +4822,7 @@ const Backup = {
       app: 'MP-1', kind: BACKUP_KIND, format: BACKUP_FORMAT, fw: APP_VERSION, exported: new Date().toISOString(),
       settings: { set: S.set, vol: S.vol, shuffle: S.shuffle, repeat: S.repeat, encMode: S.encMode },
       tracks: S.tracks.map((t, i) => ({ name: t.name, size: t.size, title: t.title, artist: t.artist, album: t.album,
-        track: t.track, fav: !!t.fav, plays: t.plays || 0, last: t.last || 0, order: i })),
+        track: t.track, fav: !!t.fav, plays: t.plays || 0, last: t.last || 0, order: i, bpm: t.bpm, beat0: t.beat0 })),
       queue: S.queue.map(key).filter(Boolean),
       recent: S.recent.map(r => ({ key: key(r.id), t: r.t })).filter(r => r.key),
     };
@@ -4014,6 +4878,7 @@ const Backup = {
       if (!t) continue;
       matched++;
       t.fav = !!b.fav; t.plays = Math.max(t.plays || 0, b.plays || 0); t.last = Math.max(t.last || 0, b.last || 0);
+      if (typeof b.bpm === 'number' && b.bpm > 0) { t.bpm = b.bpm; t.beat0 = +b.beat0 || 0; }
       t._order = b.order;
       idOf.set(trackKey(b), t.id);
     }
@@ -4073,6 +4938,172 @@ VIEWS.ask = {
 };
 
 
+
+/* ---------- 23e. RENDER: the deck's sound, written down as a new song ------
+   The song is decoded at 44.1 kHz and played offline through the deck
+   (speed, pitch, filter, space) and the limiter. EQ and tape stay out: they
+   colour whatever plays. The WAV lands right after the original, with its
+   cover, and the deck goes back to flat, so the edit plays as it was heard
+   and the original plays clean.                                          */
+const RENDER_SR = 44100, RENDER_MAX_S = 12 * 60;
+const safeFile = n => n.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-').replace(/\s+/g, ' ').trim().slice(0, 120);
+function encodeWav(b) {
+  const ch = Math.min(2, b.numberOfChannels), n = b.length, buf = new ArrayBuffer(44 + n * ch * 2), v = new DataView(buf);
+  const w = (o, str) => { for (let i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * ch * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, ch, true); v.setUint32(24, b.sampleRate, true);
+  v.setUint32(28, b.sampleRate * ch * 2, true); v.setUint16(32, ch * 2, true); v.setUint16(34, 16, true);
+  w(36, 'data'); v.setUint32(40, n * ch * 2, true);
+  const pcm = new Int16Array(buf, 44), cs = [];
+  for (let c = 0; c < ch; c++) cs.push(b.getChannelData(c));
+  for (let i = 0, o = 0; i < n; i++) for (let c = 0; c < ch; c++, o++) { const x = Math.max(-1, Math.min(1, cs[c][i])); pcm[o] = x < 0 ? x * 32768 : x * 32767; }
+  return new Blob([buf], { type: 'audio/wav' });
+}
+const Render = {
+  busy: false,
+  label() {                                   // what this edit is, in a few words
+    const st = S.set, tape = !st.lock && st.speed !== 1, plain = !st.key && !S.filter;
+    if (tape && st.speed < 1 && st.space && plain) return 'SLOWED + REVERB';
+    if (tape && st.speed === 1.25 && !st.space && plain) return 'NIGHTCORE';
+    return DeckUI.parts().filter(x => !x.startsWith('LOOP')).join(' · ');
+  },
+  async run() {
+    const tr = Player.cur();
+    if (!tr) return Snd.err();
+    if (this.busy) return toast('ONE MOMENT', 'A RENDER IS RUNNING', 1000);
+    const st = S.set;
+    if (st.speed === 1 && !st.key && !S.filter && !st.space)
+      return toast('NOTHING TO RENDER', 'SET SPEED, PITCH, FILTER OR SPACE', 1600);
+    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    if (!OAC) return fault('RENDER FAILED', 'NO OFFLINE AUDIO HERE', 'USE SAFARI ON IPHONE');
+    if ((tr.dur || S.dur || 0) / st.speed > RENDER_MAX_S) return fault('TOO LONG TO RENDER', `UP TO ${RENDER_MAX_S / 60} MIN AFTER SPEED`, 'TRY A SHORTER SONG');
+    const desc = this.label(), prog = { p: 0, stage: 'DECODING', title: tr.title, desc };
+    this.busy = true;
+    overlay('render', prog, null, 600000);
+    try {
+      const blob = await DB.get('blobs', tr.id);
+      if (!blob) throw new Error('missing');
+      const song = await decodeIn(new OAC(2, 1, RENDER_SR), await blob.arrayBuffer());
+      const len = Math.ceil((song.duration / st.speed + (st.space ? SPACE_TAIL_S : 0.3)) * RENDER_SR), bytes = len * 4 + 44;
+      await Disk.check(false);
+      if (bytes > Disk.free()) throw Object.assign(new Error('room'), { need: bytes });
+      const c = new OAC(2, len, RENDER_SR), src = c.createBufferSource(), sh = makeShifter(c);
+      await sh.ready;
+      src.buffer = song; src.playbackRate.value = st.speed;
+      src.connect(sh.input);
+      const chain = buildChain(c, sh.output, makeNoise(c));
+      applyChain(chain, { eq: { low: 0, mid: 0, high: 0 }, tape: 0, filter: S.filter, space: st.space, hiss: false }, true, true);
+      sh.set((st.key || 0) + (st.lock ? -12 * Math.log2(st.speed) : 0), 0, 0);
+      const lim = makeLimiter(c);
+      chain.out.connect(lim); lim.connect(c.destination);
+      src.start(0);
+      prog.stage = 'RENDERING';
+      if (typeof c.suspend === 'function') {      // progress: pause every 5 % to update the display
+        const total = len / RENDER_SR;
+        for (let k = 1; k < 20; k++) {
+          const at = Math.floor(total * k / 20 * RENDER_SR / 128) * 128 / RENDER_SR;
+          try { c.suspend(at).then(() => { prog.p = k / 20; LCD.dirty = true; wake(); c.resume(); }, () => {}); } catch (e) { break; }
+        }
+      }
+      const out = await c.startRendering();
+      prog.p = 1; prog.stage = 'SAVING'; LCD.dirty = true; wake();
+      await sleepMs(30);
+      const name = safeFile(`${artistOf(tr)} - ${tr.title} (${desc.toLowerCase()}).wav`);
+      const file = new File([encodeWav(out)], name, { type: 'audio/wav' });
+      let pic = null;
+      try { pic = await DB.get('covers', tr.id); } catch (e) {}
+      const at = indexOfId(tr.id) + 1;
+      const meta = {
+        name, size: file.size, type: 'audio/wav', title: `${tr.title} (${desc.toLowerCase()})`, artist: tr.artist || '', album: tr.album || '',
+        track: tr.track || '', dur: out.duration, kbps: 1411, vbr: false, khz: RENDER_SR, fmt: 'WAV', added: Date.now(),
+        id: uid(), order: at, fav: false, plays: 0, last: 0,
+        bpm: tr.bpm ? Math.round(tr.bpm * st.speed * 100) / 100 : null, beat0: tr.bpm ? (tr.beat0 || 0) / st.speed : 0,
+        edit: { of: tr.id, desc, speed: st.speed, key: st.key || 0, lock: st.lock !== false, filter: S.filter, space: st.space || 0 },
+      };
+      await DB.add(meta, file, pic);
+      S.tracks.splice(at, 0, meta);
+      if (S.cur >= at) S.cur++;
+      await DB.saveOrder(S.tracks);
+      Player.rebuildOrder();
+      OV.kind = null;
+      Object.assign(S.set, DECK_PRESETS.flat.set);  // the edit carries the sound now
+      S.filter = 0;
+      Engine.setRate(1);
+      Snd.chime();
+      toast('EDIT SAVED', 'NEXT TO THE ORIGINAL · DECK FLAT', 2600);
+    } catch (e) {
+      OV.kind = null;
+      if (e && e.need) fault('NOT ENOUGH SPACE', `THE EDIT NEEDS ${fmtBytes(e.need)}`, 'REMOVE SONGS TO MAKE ROOM');
+      else if (isQuota(e)) fault('STORAGE FULL', 'THE EDIT DID NOT FIT', 'REMOVE SONGS TO MAKE ROOM');
+      else fault('RENDER FAILED', 'THE SONG COULD NOT BE PROCESSED', 'TRY AGAIN');
+    } finally {
+      this.busy = false;
+      commit();
+    }
+  },
+};
+
+/* share a song's file: the phone's share sheet (save to Files, AirDrop …),
+   or inside a preview frame the viewer's own save dialog, as a zip.      */
+const CRC_T = (() => { const t = new Int32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c; } return t; })();
+async function zipStore(name, blob) {           // one file, stored (no compression)
+  const data = new Uint8Array(await blob.arrayBuffer()), nm = new TextEncoder().encode(name);
+  let crc = -1;
+  for (let i = 0; i < data.length; i++) crc = CRC_T[(crc ^ data[i]) & 255] ^ (crc >>> 8);
+  crc = (crc ^ -1) >>> 0;
+  const lh = new DataView(new ArrayBuffer(30)), cd = new DataView(new ArrayBuffer(46)), eo = new DataView(new ArrayBuffer(22));
+  [[0, 0x04034b50, 4], [4, 20, 2], [6, 0x0800, 2], [8, 0, 2], [10, 0, 2], [12, 0x21, 2], [14, crc, 4], [18, data.length, 4], [22, data.length, 4], [26, nm.length, 2], [28, 0, 2]]
+    .forEach(([o, x, z]) => z === 4 ? lh.setUint32(o, x, true) : lh.setUint16(o, x, true));
+  [[0, 0x02014b50, 4], [4, 20, 2], [6, 20, 2], [8, 0x0800, 2], [10, 0, 2], [12, 0, 2], [14, 0x21, 2], [16, crc, 4], [20, data.length, 4], [24, data.length, 4],
+   [28, nm.length, 2], [30, 0, 2], [32, 0, 2], [34, 0, 2], [36, 0, 2], [38, 0, 4], [42, 0, 4]]
+    .forEach(([o, x, z]) => z === 4 ? cd.setUint32(o, x, true) : cd.setUint16(o, x, true));
+  [[0, 0x06054b50, 4], [4, 0, 2], [6, 0, 2], [8, 1, 2], [10, 1, 2], [12, 46 + nm.length, 4], [16, 30 + nm.length + data.length, 4], [20, 0, 2]]
+    .forEach(([o, x, z]) => z === 4 ? eo.setUint32(o, x, true) : eo.setUint16(o, x, true));
+  return new Blob([lh, nm, data, cd, nm, eo], { type: 'application/zip' });
+}
+const Share = {
+  ready: null,                                  // { id, blob }: fetched when the song menu opens, so
+  prepare(id) {                                 // the share sheet opens inside the push itself
+    if (this.ready && this.ready.id === id) return;
+    this.ready = { id, blob: null };
+    DB.get('blobs', id).then(b => { if (this.ready && this.ready.id === id) this.ready.blob = b; }, () => {});
+  },
+  async file(tr) {
+    let blob = this.ready && this.ready.id === tr.id ? this.ready.blob : null;
+    if (!blob) { try { blob = await DB.get('blobs', tr.id); } catch (e) {} }
+    if (!blob) return fault('SHARE FAILED', 'THE FILE IS MISSING', 'ADD THE SONG AGAIN');
+    const ext = ((tr.name || '').match(/\.([a-z0-9]{2,4})$/i) || [])[1] || (tr.fmt === 'WAV' ? 'wav' : 'mp3');
+    const name = safeFile(`${artistOf(tr)} - ${tr.title}.${ext.toLowerCase()}`);
+    const done = () => toast('FILE SHARED', null, 1200);
+    const fail = () => fault('SHARE FAILED', 'SAVING FILES IS BLOCKED HERE', 'OPEN MP-1 FROM ITS OWN ADDRESS');
+    let framed = true;
+    try { framed = window.self !== window.top; } catch (e) {}
+    if (framed) {
+      const dl = await HOST_DOWNLOADS;
+      if (!dl) return fail();
+      try { await dl.save({ filename: name.replace(/\.[^.]+$/, '') + '.zip', data: await zipStore(name, blob) }); return done(); }
+      catch (e) {
+        const code = e && e.code;
+        if (code === 'declined') return toast('CANCELLED', null, 900);
+        if (code === 'rate_limited') return toast('ONE MOMENT', 'A SAVE IS ALREADY OPEN', 1200);
+        return fail();
+      }
+    }
+    const file = new File([blob], name, { type: blob.type || tr.type || 'audio/mpeg' });
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        navigator.share({ files: [file], title: tr.title }).then(done, e => { if (!e || e.name !== 'AbortError') fail(); });
+        return;
+      }
+      const u = URL.createObjectURL(file), a = document.createElement('a');
+      a.href = u; a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(u), 10000);
+      done();
+    } catch (e) { fail(); }
+  },
+};
+
 /* ---------- 24. now playing: cover, text, visualiser, waveform scrubber --- */
 
 /* waveform overview: decoded once at 8 kHz (≈ 1/5 of the memory of a full
@@ -4092,7 +5123,7 @@ const Wave = {
   },
   async compute(tr) {
     const stored = await Store.getWave(tr.id);
-    if (stored) return stored;
+    if (stored && tr.bpm != null) return stored;
     const blob = await DB.get('blobs', tr.id);
     if (!blob) return null;
     const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
@@ -4105,6 +5136,8 @@ const Wave = {
     });
     const ch = [];
     for (let c = 0; c < audio.numberOfChannels; c++) ch.push(audio.getChannelData(c));
+    if (tr.bpm == null) analyseTempo(tr, ch, WAVE_RATE);
+    if (stored) return stored;
     const len = audio.length, peaks = new Float32Array(WAVE_COLS);
     let max = 1e-6;
     for (let b = 0; b < WAVE_COLS; b++) {
@@ -4217,6 +5250,26 @@ function drawDisc(cx, cy, t) {     // placeholder art: a pixel record
   const a = S.playing && !REDUCED.matches ? t / 1000 * 3.2 : 0.6;
   rect(Math.round(cx + Math.cos(a) * 16), Math.round(cy + Math.sin(a) * 16), 2, 1, INK.ACC);
 }
+/* the loop's own waveform, from the decoded song (160 peaks across the loop) */
+let loopWaveKey = '', loopWaveData = null;
+function loopWave() {
+  const buf = Deck.buf, { a, b } = Deck.loop;
+  if (!buf || !(b > a)) return null;
+  const key = `${Deck.bufId}:${a}:${b}`;
+  if (key === loopWaveKey) return loopWaveData;
+  const sr = buf.sampleRate, ch = chansOf(buf), i0 = Math.floor(a * sr), n = Math.max(1, Math.floor((b - a) * sr)), pk = new Float32Array(WAVE_COLS);
+  let max = 1e-6;
+  for (let c = 0; c < WAVE_COLS; c++) {
+    const s0 = i0 + Math.floor(c * n / WAVE_COLS), s1 = i0 + Math.floor((c + 1) * n / WAVE_COLS);
+    let m = 0;
+    for (const d of ch) for (let i = s0; i < s1; i += 4) { const v = Math.abs(d[i] || 0); if (v > m) m = v; }
+    pk[c] = m; if (m > max) max = m;
+  }
+  const out = new Uint8Array(WAVE_COLS);
+  for (let c = 0; c < WAVE_COLS; c++) out[c] = Math.round(Math.sqrt(pk[c] / max) * 255);
+  loopWaveKey = key; loopWaveData = out;
+  return out;
+}
 /* loading = we are meant to be playing but the clock has not moved lately.
    This covers first load, buffering and a stalled (silent) element alike.  */
 const STALL_MS = 700;
@@ -4244,7 +5297,8 @@ function drawNow(t) {
   anim = marquee(tr.title, 45, 11, 115, F5, INK.LIT, ts) || anim;
   anim = marquee(tr.artist || 'UNKNOWN ARTIST', 45, 21, 115, F3, INK.LIT, ts, 18) || anim;
   if (tr.album) anim = marquee(tr.album, 45, 28, 115, F3, INK.DIM, ts, 18) || anim;
-  const info = [tr.kbps ? (tr.vbr ? 'VBR ' : '') + tr.kbps + 'K' : '', tr.fmt, tr.khz ? (tr.khz / 1000).toFixed(1).replace('.0', '') + 'K' : ''].filter(Boolean).join(' · ');
+  const info = [tr.bpm ? Math.round(tr.bpm * S.set.speed) + ' BPM' : '', tr.kbps ? (tr.vbr ? 'VBR ' : '') + tr.kbps + 'K' : '', tr.fmt,
+    tr.khz && !tr.bpm ? (tr.khz / 1000).toFixed(1).replace('.0', '') + 'K' : ''].filter(Boolean).join(' · ');
   text(info, 45, 35, F3, INK.DIM);
   // volume readout — or an honest hint when iOS owns the volume
   icon('spk', 45, 42, INK.DIM);
@@ -4264,7 +5318,20 @@ function drawNow(t) {
   const d = S.dur || 0, el = Engine.out.getAttribute('src') ? (Engine.time || S.t) : S.t;
   const p = d ? clamp(el / d, 0, 1) : 0;
   const wave = Wave.get(tr);
-  drawScrubber(0, 77, LW, p, wave, 3, t);
+  const lw = Deck.loop.beats && !Deck.loop.arming ? loopWave() : null;
+  if (lw) {                                        // in a loop the lane zooms onto it: brackets, the loop's own waveform
+    const L = Deck.loop.b - Deck.loop.a;
+    drawScrubber(3, 77, LW - 6, clamp((el - Deck.loop.a) / L, 0, 1), lw, 3, t);
+    vline(0, 73, 9, INK.ACC); hline(0, 73, 2, INK.ACC); hline(0, 81, 2, INK.ACC);
+    vline(LW - 1, 73, 9, INK.ACC); hline(LW - 2, 73, 2, INK.ACC); hline(LW - 2, 81, 2, INK.ACC);
+  } else {
+    drawScrubber(0, 77, LW, p, wave, 3, t);
+    if (Deck.loop.beats && d) {                    // arming: where the loop will be, blinking
+      const xa = Math.round((LW - 1) * clamp(Deck.loop.a / d, 0, 1)), xb = Math.max(xa + 1, Math.round((LW - 1) * clamp(Deck.loop.b / d, 0, 1)));
+      if ((t % 500) < 250) { vline(xa, 72, 11, INK.ACC); vline(xb, 72, 11, INK.ACC); hline(xa, 72, xb - xa + 1, INK.ACC); }
+      anim = true;
+    }
+  }
   if (!wave && Wave.busy(tr)) { const sx = Math.floor(t / 14) % (LW + 20) - 20; rect(Math.max(0, sx), 77, 12, 1, INK.ACC); anim = true; }
   // times — elapsed blinks while paused, like real hardware
   if (S.playing || REDUCED.matches || (t % 1000) < 620) text(fmtTime(el), 0, 84, F5, INK.LIT);
@@ -4275,15 +5342,21 @@ function drawNow(t) {
     anim = true;
   } else {
     const chips = [];
+    if (Deck.loop.beats) chips.push({ s: (Deck.loop.arming ? 'ARM ' : 'LOOP ') + fmtBeats(Deck.loop.beats), acc: true });
+    if (S.set.key) chips.push({ s: `${S.set.key > 0 ? '+' : ''}${S.set.key}ST` });
+    if (S.filter) chips.push({ s: (S.filter < 0 ? 'LP' : 'HP') + Math.abs(S.filter) });
+    if (S.set.space) chips.push({ s: 'SP' + S.set.space });
     if (S.sleepUntil) chips.push({ ic: 'moon', s: S.sleepUntil === 'eot' ? 'END' : Math.ceil((S.sleepUntil - Date.now()) / 60000) + 'M' });
     if ((S.set.xfade || 0) > 0 && S.set.out === 'dsp') chips.push({ s: 'XF' + S.set.xfade });
+    const cw = c => (c.ic ? 7 : 0) + textW(c.s, F3);
+    while (chips.length > 1 && chips.reduce((a, c, i) => a + (i ? textW(' · ', F3) + 1 : 0) + cw(c), 0) > 86) chips.pop();
     if (chips.length) {
       const SEP = ' · ', w = chips.reduce((a, c, i) => a + (i ? textW(SEP, F3) + 1 : 0) + (c.ic ? 7 : 0) + textW(c.s, F3), 0);
       let x = Math.round((LW - w) / 2);
       chips.forEach((c, i) => {
         if (i) x += text(SEP, x, 85, F3, INK.DIM) + 1;
         if (c.ic) { icon(c.ic, x, 84, INK.DIM); x += 7; }
-        x += text(c.s, x, 85, F3, INK.DIM) + 1;
+        x += text(c.s, x, 85, F3, c.acc ? INK.ACC : INK.DIM) + 1;
       });
     }
   }
@@ -4334,7 +5407,7 @@ const MS = {
     const t = now();
     if (!force && t - this.lastPos < 1000) return;
     this.lastPos = t;
-    const d = Engine.out.duration;
+    const d = Engine.duration;
     if (!isFinite(d) || d <= 0) return;
     try { navigator.mediaSession.setPositionState({ duration: d, playbackRate: 1, position: clamp(Engine.time, 0, d) }); } catch (e) {}
   },
@@ -4564,13 +5637,24 @@ const Access = {
       case 'air': s = a ? 'Wireless on.' : 'Wireless off.'; break;
       case 'add': if (a.k === 0) s = `Adding ${a.n} ${a.n === 1 ? 'song' : 'songs'}.`; break;
       case 'selftest': s = 'Self test. Measuring the display for two seconds.'; break;
+      case 'param': if (b !== 'hint') s = Access.param(a); else s = `${spoken(PARAM_NAME[a])}: turn the encoder.`; break;
+      case 'render': s = `Rendering ${spoken(a.desc)}.`; break;
       case 'shiftmap': s = 'Shift functions: 02 setup, 03 favourite, 04 sleep, 05 visualiser, 06 effects, 07 recent, 08 stop, 09 queue. Encoder: speed. Push: find.'; break;
     }
     if (s) { clearTimeout(this.timer); this.say(s); this.timer = setTimeout(() => this.announce(), 1600); }
   },
+  param(p) {
+    const tr = Player.cur();
+    if (p === 'key') return `Pitch ${S.set.key || 0} semitones, ${S.set.lock ? 'key lock' : 'tape'}.`;
+    if (p === 'filter') return S.filter ? `Filter ${S.filter < 0 ? 'low pass' : 'high pass'} ${Math.round(filterHz(S.filter))} hertz.` : 'Filter open.';
+    if (p === 'space') return S.set.space ? `Space ${S.set.space}.` : 'Space dry.';
+    if (p === 'loop') return Deck.loop.beats ? `Loop ${fmtBeats(Deck.loop.beats).replace('/', ' over ')} ${tr && tr.bpm ? 'beats' : 'half seconds'}${Deck.loop.arming ? ', arming' : ''}.` : 'Loop off.';
+    return '';
+  },
   /* what one detent of the encoder does right now, for the adjustable stand-in */
   encText() {
     if (S.power !== 'on') return 'Off';
+    if (App.holding) return this.param(HOLD_TURN[App.holding]);
     if (S.shift) return `Speed ${fmtSpeed(S.set.speed).replace('×', ' times')}`;
     const c = Nav.top();
     if (S.screen === 'list' && c) {
@@ -4589,8 +5673,8 @@ const Access = {
     L('menu', sh ? 'Setup' : Nav.stack.length ? 'Back' : 'Menu');
     L('add', sh ? 'Favourite' : 'Add songs');
     L('air', sh ? 'Sleep timer' : S.wireless ? 'Wireless output, on' : 'Wireless output');
-    L('shuf', sh ? 'Visualiser' : 'Shuffle');
-    L('rpt', sh ? 'Effects' : `Repeat ${['off', 'all', 'one'][S.repeat]}`);
+    L('shuf', sh ? 'Deck' : 'Shuffle');
+    L('rpt', sh ? 'Effects' : Deck.loop.beats ? 'Leave loop' : `Repeat ${['off', 'all', 'one'][S.repeat]}`);
     L('prev', sh ? 'Recent' : 'Previous');
     L('play', sh ? 'Stop' : S.playing ? 'Pause' : 'Play');
     L('next', sh ? 'Queue' : 'Next');
@@ -4858,7 +5942,7 @@ setTimeout(() => { if (S.tracks.length) Disk.persist(); Disk.check(true); }, 400
 /* debug/test hooks (harmless in production) */
 window.__mp1 = { S, LCD, powerOn, commit, overlay, toast, render: () => { LCD.dirty = true; renderDisplay(now()); },
   step: (ms) => { for (let i = 0; i < ms / 16.67; i++) for (const a of anims) if (a(1 / 60, now()) === false) anims.delete(a); },
-  Enc, KEYS, Nav, App, Inputs, SwHold, SwSnd, Library, Player, Engine, DB, Covers, Tags, readMeta, Spec, Wave, Store, fault, OV, THEMES, Shift, Queue, Sleep, Search, Lists, VIEWS, Access, Diag, FX, Disk, Backup, freezeBoot: ms => { bootFreeze = ms; LCD.dirty = true; } };
+  Enc, KEYS, Nav, App, Inputs, SwHold, SwSnd, Library, Player, Engine, DB, Covers, Tags, readMeta, Spec, Wave, Store, fault, OV, THEMES, Shift, Queue, Sleep, Search, Lists, VIEWS, Access, Diag, FX, Disk, Backup, Deck, DeckUI, DeckPage, Render, Share, detectTempo, measureLag, freezeBoot: ms => { bootFreeze = ms; LCD.dirty = true; } };
 window.__errs = [];
 addEventListener('error', e => window.__errs.push(String(e.message)));
 </script>

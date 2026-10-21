@@ -10,20 +10,24 @@ fonts. Next to it: `sw.js` (offline shell), `manifest.webmanifest` and `icons/`.
 ## Controls
 
 The keys are numbered like a manual. Every key has a second function printed
-under it, reached with **01 SHIFT** (OP-1 style).
+under it, reached with **01 SHIFT** (OP-1 style). Keys 03–06 also have a third,
+printed in orange: **hold the key and turn 10** to play the song like an
+instrument; **hold the key and push 10** sets that control back to neutral.
 
-| # | Key | Press | SHIFT + press |
-|---|-----|-------|---------------|
-| 01 | SHIFT | hold = momentary, tap = one shot, tap twice = lock | — |
-| 02 | MENU | menu / back (hold: home) | setup |
-| 03 | ADD | add songs (iOS file picker) | favourite |
-| 04 | AIR | AirPlay picker | sleep timer |
-| 05 | SHUF | shuffle | visualiser (spectrum / scope) |
-| 06 | RPT | repeat off / all / one | FX: 3-band EQ, tape, crossfade, speed |
-| 07 | PREV | previous (hold: scan back) | recent |
-| 08 | PLAY | play / pause | stop |
-| 09 | NEXT | next (hold: scan forward) | queue |
-| 10 | ENC | turn: VOL / SEEK / SCRL or scroll lists · push: OK · hold: mode / song options | turn: speed (pitch kept) · push: find |
+| # | Key | Press | SHIFT + press | Hold + turn 10 |
+|---|-----|-------|---------------|----------------|
+| 01 | SHIFT | hold = momentary, tap = one shot, tap twice = lock | — | — |
+| 02 | MENU | menu / back (hold: home) | setup | — |
+| 03 | ADD | add songs (iOS file picker) | favourite | SPACE: reverb 0–10 |
+| 04 | AIR | AirPlay picker | sleep timer | FILTER: low-pass ← → high-pass |
+| 05 | SHUF | shuffle | DECK page | PITCH: ±12 semitones |
+| 06 | RPT | repeat off / all / one (in a loop: leave it) | FX: EQ, tape, crossfade, speed | LOOP: ¼ – 32 beats |
+| 07 | PREV | previous (hold: scan back) | recent | — |
+| 08 | PLAY | play / pause | stop | — |
+| 09 | NEXT | next (hold: scan forward) | queue | — |
+| 10 | ENC | turn: VOL / SEEK / SCRL or scroll lists · push: OK · hold: mode / song options | turn: speed · push: find | — |
+
+Holding 03–06 without turning shows the control and its current value.
 
 Slide switches: **HOLD** locks every control, **SND** mutes the UI sounds.
 Holding SHIFT shows the map of second functions on the display.
@@ -32,6 +36,31 @@ Hardware keyboard (iPad keyboards, Full Keyboard Access): **1–9** are keys 01�
 (SHIFT + digit works on any layout), arrows turn the encoder, Return pushes it,
 Space plays, Esc goes back, **H** toggles HOLD.
 
+## Deck: the song as an instrument
+
+- **Pitch** ±12 semitones at any speed. An AudioWorklet shifter splices its read
+  head where a cross-correlation says the waveform continues, so tones stay
+  exactly on pitch (measured: a 440 Hz tone lands on 220 / 330 / 370 / 415 /
+  659 / 880 Hz for −12 / −5 / −3 / −1 / +7 / +12).
+- **Speed** 0.5×–2× (SHIFT + turn) in **key lock** (pitch kept) or **tape**
+  (pitch follows, like a turntable). LOCK / TAPE on the DECK page or in settings.
+- **Filter**: one knob, low-pass to the left, high-pass to the right, resonant.
+- **Space**: a plate-like reverb (2.4 s), dry/wet on one knob.
+- **Beat loops** of ¼, ½, 1, 2, 4, 8, 16 or 32 beats. The tempo of every song is
+  detected (onset curve, autocorrelation, comb refinement), the loop snaps to
+  the beat just before you turned, and loops are sample-accurate: from the first
+  loop on, the song plays from its decoded buffer. The switch from the
+  `<audio>` element is aligned on the sound (cross-correlation; in Chromium it
+  lands within 1 ms) or, where a player feeds Web Audio unevenly, made exactly
+  at the loop's end. While looping, the scrubber zooms onto the loop.
+- **Presets**: SLOWED (0.8× tape + space), NIGHTCORE (1.25× tape), FLAT.
+- **Render**: writes the deck's sound (speed, pitch, filter, space) into a new
+  song: a WAV with the original's cover, placed right after it in the library.
+  The deck then goes back to flat, so the edit plays as it was heard. EQ and
+  tape FX stay out of the render; they colour whatever plays.
+- **Share file** (song menu): any song, edits included, through the iOS share
+  sheet (Save to Files, AirDrop, …).
+
 ## Functions
 
 - Library: tracks, artists, albums, favourites, recently played, up-next queue.
@@ -39,7 +68,8 @@ Space plays, Esc goes back, **H** toggles HOLD.
 - Sleep timer (15–90 min or end of song) with a 12 s fade.
 - 3-band EQ (±12 dB), one tape / lo-fi effect (saturation, wow & flutter, hiss,
   roll-off), output limiter.
-- Playback speed 0.5×–2× with pitch preserved.
+- Playback speed 0.5×–2× with pitch preserved or following (see the deck).
+- Tempo (BPM) shown on the now-playing screen and in the song info.
 - Crossfade 0 / 2 / 4 / 8 s with equal-power curves; gapless hand-over at 0.
 - Backup / restore of library metadata (favourites, play counts, order, queue,
   recent, settings) as JSON; audio stays on the phone.
@@ -91,6 +121,12 @@ The service worker is versioned by the app version and only caches the shell.
 - Storage is the browser's: iOS may evict data of web apps not used for weeks
   unless persistent storage is granted (it usually is for home-screen apps).
 - Portrait only is enforced by the page (a rotate card), not by iOS.
+- The deck (pitch, filter, space, loops) and render work on the DSP output only.
+  The first loop on a song decodes it fully (about 100 MB of memory for four
+  minutes) and engages after a second or two; later loops on that song are
+  instant.
+- Renders are uncompressed WAV (about 10 MB per minute); Safari has no
+  built-in encoder for compressed audio.
 
 ## Performance
 
@@ -105,6 +141,18 @@ at 60 fps there at 1× density. iOS Safari composites canvases on the GPU; run
 the self test on the phone for its number.
 
 ## Changelog
+
+**2.1.0** — a tool in your pocket
+- Hold 03–06 and turn 10: SPACE, FILTER, PITCH, LOOP; hold and push resets.
+  Printed on the body in orange; holding a key shows its control.
+- Correlation-spliced AudioWorklet pitch shifter (native fallback).
+- Key lock / tape speed modes; SLOWED, NIGHTCORE, FLAT presets.
+- Tempo detection for every song; beat-snapped, sample-accurate loops with an
+  aligned hand-over to a decoded buffer; zoomed loop lane on the scrubber.
+- DECK page (SHIFT + 05): six faders and the preset / render buttons.
+- RENDER to a new WAV song; SHARE FILE for any song.
+- The encoder no longer coasts after a SHIFT or hold-key turn (a coasting
+  turn used to land on the volume).
 
 **2.0.1**
 - Display redraws only on change, and only the changed rows (pixel-identical
