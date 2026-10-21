@@ -3896,6 +3896,10 @@ const Backup = {
         navigator.share({ files: [file], title: 'MP-1 backup' }).then(done, e => { if (!e || e.name !== 'AbortError') fail(); });
         return;
       }
+      // inside a sandboxed preview frame a download link does nothing: say so instead of claiming success
+      let framed = true;
+      try { framed = window.self !== window.top; } catch (e) {}
+      if (framed) return fail();
       const u = URL.createObjectURL(file), a = document.createElement('a');
       a.href = u; a.download = file.name;
       document.body.appendChild(a); a.click(); a.remove();
