@@ -10,8 +10,9 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="MP-1">
 <meta name="format-detection" content="telephone=no">
-<link rel="apple-touch-icon" id="touchIcon" href="data:,">
-<link rel="manifest" id="manifestLink" href="data:,">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
 <style>
 /* ==========================================================================
    MP-1 — portable audio player
@@ -2257,9 +2258,10 @@ function drawList(t) {
     return false;
   }
   let y0 = LIST_Y0, rows = LIST_ROWS;
-  if (c.id === 'confirm') {                         // question line above the choices
-    textC(c.arg.q, LW / 2, 22, F5, INK.LIT);
-    y0 = 40; rows = 2;
+  if (c.id === 'confirm' || c.id === 'ask') {       // question line above the choices
+    textC(c.arg.q, LW / 2, 16, F5, INK.LIT);
+    if (c.arg.sub) marquee(c.arg.sub, 8, 27, 144, F3, INK.ACC, (t - c.selT) / 1000, 20);
+    y0 = 40; rows = items.length;
   }
   if (!def.static) {
     if (c.sel < c.top) c.top = c.sel;
@@ -3610,7 +3612,7 @@ const Player = {
 };
 
 /* ---------- 23. library management --------------------------------------- */
-const RECENT_AFTER_S = 10, RECENT_MAX = 50;
+const RECENT_AFTER_S = 10, RECENT_MAX = 50, BIG_FILE_BYTES = 50 * 1024 * 1024;
 const GAPLESS_LEAD_S = 0.12, GAPLESS_FADE_S = 0.06, XFADE_TICK_MS = 100;
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const fmtBytes = n => n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : n >= 1e6 ? (n / 1e6).toFixed(1) + ' MB' : Math.round(n / 1e3) + ' KB';
@@ -3638,18 +3640,41 @@ const Library = {
     try { inp.click(); } catch (e) { toast('PICKER BLOCKED'); }
   },
   async import(list) {
-    const files = Array.from(list || []).filter(looksAudio);
-    if (!files.length) { if (list && list.length) toast('NOT AUDIO', 'MP3 · AAC · WAV'); return; }
+    const all = Array.from(list || []);
+    const probe = document.createElement('audio');
+    const playable = f => !f.type || f.type === 'audio/mpeg' || probe.canPlayType(f.type) !== '';
+    const files = all.filter(f => looksAudio(f) && f.size > 0 && playable(f));
+    const rejected = all.length - files.length;
+    if (!files.length) {
+      if (all.length) fault('NOTHING TO ADD', all.some(f => f.size === 0) ? 'EMPTY OR UNSUPPORTED FILES' : 'NOT AN AUDIO FORMAT THIS PHONE PLAYS', 'MP3 · AAC · M4A · WAV · FLAC');
+      return;
+    }
+    await Disk.check(false);
+    const need = files.reduce((n, f) => n + f.size, 0);
+    if (need > Disk.free()) {
+      return fault('NOT ENOUGH SPACE', `NEED ${fmtBytes(need)} · FREE ${fmtBytes(Disk.free())}`, 'ADD FEWER SONGS OR REMOVE SOME');
+    }
     this.busy = true;
-    let added = 0, skipped = 0, full = false;
+    commit();
+    let added = 0, skipped = rejected, full = false, dupPolicy = null;
     const wasEmpty = !S.tracks.length;
     for (let k = 0; k < files.length; k++) {
       const f = files[k];
-      overlay('add', { k, n: files.length, name: f.name }, null, 120000);
+      const prog = { k, n: files.length, name: f.name, size: fmtBytes(f.size), added, skipped, big: f.size > BIG_FILE_BYTES };
+      overlay('add', prog, null, 600000);
       try {
         const { meta, pic } = await readMeta(f);
-        meta.id = uid();
-        meta.order = S.tracks.length;
+        if (meta.fmt === 'MP3' && !meta.kbps && f.size > 0) { skipped++; continue; }   // no MPEG frames: not really an MP3
+        const dup = S.tracks.find(t => t.size === f.size && norm(t.title) === norm(meta.title));
+        if (dup) {
+          if (dupPolicy === 'skipAll') { skipped++; continue; }
+          OV.kind = null;
+          const choice = await askDuplicate(meta.title);
+          if (choice === 'skipAll') dupPolicy = 'skipAll';
+          if (choice !== 'add') { skipped++; continue; }
+          overlay('add', prog, null, 600000);
+        }
+        Object.assign(meta, { id: uid(), order: S.tracks.length, fav: false, plays: 0, last: 0 });
         await DB.add(meta, f, pic);
         S.tracks.push(meta);
         added++;
@@ -3662,14 +3687,15 @@ const Library = {
     this.busy = false;
     OV.kind = null;
     Player.rebuildOrder();
-    if (full) { Snd.err(); toast('STORAGE FULL', `${added} ADDED`, 2400); }
+    if (full) fault('STORAGE FULL', `${added} ADDED BEFORE IT FILLED UP`, 'REMOVE SONGS TO MAKE ROOM', 3000);
     else toast(`${added} SONG${added === 1 ? '' : 'S'} ADDED`, skipped ? `${skipped} SKIPPED` : null, 1500);
     if (added) {
       Snd.blip(1568, 0.05, 0.1);
-      if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+      Disk.persist();
       if (wasEmpty || S.cur < 0) { S.screen = Nav.stack.length ? 'list' : 'now'; Player.load(0); }
       else Player.prefetch();
     }
+    Disk.check(true);
     commit();
   },
   toggleFav(id) {
@@ -3689,6 +3715,7 @@ const Library = {
     Store.kvSet('recent', S.recent);
   },
   async refreshStorage() {
+    Disk.check(false);
     try {
       if (navigator.storage && navigator.storage.estimate) {
         const e = await navigator.storage.estimate();
@@ -3757,8 +3784,118 @@ const Library = {
 };
 $('#filePick').addEventListener('change', e => Library.import(e.target.files));
 
-/* backup is wired in the data milestone */
-const Backup = { save() { toast('BACKUP', 'SOON', 900); }, pick() { toast('RESTORE', 'SOON', 900); } };
+/* ---------- 23b. backup / restore of library metadata ---------------------
+   Audio stays on the device; the backup carries what took time to build:
+   favourites, play counts, order, queue, recent and settings. Songs are
+   matched back by file name + size, or by title + artist + size.         */
+const BACKUP_KIND = 'mp1-library-backup', BACKUP_FORMAT = 1;
+const trackKey = t => `${t.name}|${t.size}`;
+const trackKey2 = t => `${norm(t.title)}|${norm(t.artist)}|${t.size}`;
+const Backup = {
+  build() {
+    const key = id => { const t = byId(id); return t ? trackKey(t) : null; };
+    return {
+      app: 'MP-1', kind: BACKUP_KIND, format: BACKUP_FORMAT, fw: APP_VERSION, exported: new Date().toISOString(),
+      settings: { set: S.set, vol: S.vol, shuffle: S.shuffle, repeat: S.repeat, encMode: S.encMode },
+      tracks: S.tracks.map((t, i) => ({ name: t.name, size: t.size, title: t.title, artist: t.artist, album: t.album,
+        track: t.track, fav: !!t.fav, plays: t.plays || 0, last: t.last || 0, order: i })),
+      queue: S.queue.map(key).filter(Boolean),
+      recent: S.recent.map(r => ({ key: key(r.id), t: r.t })).filter(r => r.key),
+    };
+  },
+  save() {
+    if (!S.tracks.length) return toast('NOTHING TO BACK UP', 'LIBRARY IS EMPTY');
+    const stamp = new Date().toISOString().slice(0, 10);
+    const file = new File([JSON.stringify(this.build(), null, 1)], `mp1-backup-${stamp}.json`, { type: 'application/json' });
+    const done = () => toast('BACKUP SAVED', `${S.tracks.length} SONGS · NO AUDIO`, 1600);
+    const fail = () => fault('BACKUP FAILED', 'SAVING FILES IS BLOCKED HERE', 'OPEN MP-1 FROM ITS OWN ADDRESS');
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        navigator.share({ files: [file], title: 'MP-1 backup' }).then(done, e => { if (!e || e.name !== 'AbortError') fail(); });
+        return;
+      }
+      const u = URL.createObjectURL(file), a = document.createElement('a');
+      a.href = u; a.download = file.name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(u), 10000);
+      done();
+    } catch (e) { fail(); }
+  },
+  pick() {
+    const inp = $('#restorePick');
+    inp.value = '';
+    try { inp.click(); } catch (e) { fault('PICKER BLOCKED', 'THE FILE PICKER COULD NOT OPEN', 'TRY AGAIN FROM THE MENU'); }
+  },
+  async restore(file) {
+    let data;
+    try { data = JSON.parse(await file.text()); } catch (e) { return fault('NOT A BACKUP', 'THE FILE IS NOT READABLE JSON', 'PICK AN MP1-BACKUP FILE'); }
+    if (!data || data.kind !== BACKUP_KIND || !Array.isArray(data.tracks)) return fault('NOT A BACKUP', 'THIS FILE IS NOT FROM MP-1', 'PICK AN MP1-BACKUP FILE');
+    const by1 = new Map(S.tracks.map(t => [trackKey(t), t])), by2 = new Map(S.tracks.map(t => [trackKey2(t), t]));
+    const idOf = new Map();
+    let matched = 0;
+    for (const b of data.tracks) {
+      const t = by1.get(trackKey(b)) || by2.get(trackKey2(b));
+      if (!t) continue;
+      matched++;
+      t.fav = !!b.fav; t.plays = Math.max(t.plays || 0, b.plays || 0); t.last = Math.max(t.last || 0, b.last || 0);
+      t._order = b.order;
+      idOf.set(trackKey(b), t.id);
+    }
+    // backup order first, songs added since keep their place at the end
+    S.tracks.sort((a, b) => (a._order ?? 1e9) - (b._order ?? 1e9));
+    S.tracks.forEach(t => { delete t._order; });
+    try { await DB.saveOrder(S.tracks); } catch (e) { return fault('RESTORE FAILED', 'STORAGE REFUSED THE WRITE', 'FREE SOME SPACE, TRY AGAIN'); }
+    S.queue = (data.queue || []).map(k => idOf.get(k)).filter(Boolean); Queue.save();
+    S.recent = (data.recent || []).map(r => ({ id: idOf.get(r.key), t: r.t })).filter(r => r.id); Store.kvSet('recent', S.recent);
+    const st = data.settings || {};
+    if (st.set && typeof st.set === 'object') {
+      for (const k of Object.keys(S.set)) if (k in st.set && typeof st.set[k] === typeof S.set[k]) S.set[k] = st.set[k];
+    }
+    if (typeof st.vol === 'number') S.vol = clamp(st.vol, 0, 1);
+    if (typeof st.shuffle === 'boolean') S.shuffle = st.shuffle;
+    if ([0, 1, 2].includes(st.repeat)) S.repeat = st.repeat;
+    applyEdition(); LCD.buildMask(); Engine.applyVolume(); Engine.applyFx(); Engine.setRate(S.set.speed); SwSnd.sync();
+    S.cur = S.tracks.findIndex(t => t.id === (Player.cur() || {}).id);
+    Player.rebuildOrder();
+    toast('RESTORED', `${matched} MATCHED · ${data.tracks.length - matched} MISSING`, 2200);
+    commit();
+  },
+};
+$('#restorePick').addEventListener('change', e => { const f = e.target.files && e.target.files[0]; if (f) Backup.restore(f); });
+
+/* ---------- 23c. storage health ------------------------------------------- */
+const LOW_FREE_BYTES = 250 * 1024 * 1024, LOW_RATIO = 0.9;
+const Disk = {
+  quota: 0, usage: 0,
+  async check(warn) {
+    try {
+      if (!navigator.storage || !navigator.storage.estimate) return;
+      const e = await navigator.storage.estimate();
+      this.quota = e.quota || 0; this.usage = e.usage || 0;
+      const free = Math.max(0, this.quota - this.usage);
+      const low = this.quota > 0 && (free < LOW_FREE_BYTES || this.usage / this.quota > LOW_RATIO);
+      if (low && warn && !S.storageLow) overlay('storage', { ratio: this.usage / this.quota, free: fmtBytes(free) }, null, 4200);
+      S.storageLow = low;
+      LCD.dirty = true; wake();
+    } catch (e) { /* estimate unsupported: stay quiet */ }
+  },
+  free() { return this.quota ? Math.max(0, this.quota - this.usage) : Infinity; },
+  /* ask the browser to keep our data even under storage pressure */
+  persist() { try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {}); } catch (e) {} },
+};
+
+/* ---------- 23d. duplicate prompt -------------------------------------- */
+function askDuplicate(name) {
+  return new Promise(res => {
+    const pick = v => () => { Nav.back(); res(v); };
+    Nav.open('ask', { arg: { q: 'ALREADY IN LIBRARY', sub: name, options: [['SKIP', pick('skip')], ['ADD ANYWAY', pick('add')], ['SKIP ALL DUPLICATES', pick('skipAll')]] } });
+  });
+}
+VIEWS.ask = {
+  title: 'IMPORT',
+  items: c => c.arg.options.map(([label, act]) => ({ label, act })),
+};
+
 
 /* ---------- 24. now playing: cover, text, visualiser, waveform scrubber --- */
 
@@ -4125,11 +4262,12 @@ function unlockAudio() {
 }, { capture: true, passive: true }));
 
 /* ---------- 29. home-screen icon + inline manifest ----------------------- */
-function drawIcon(size) {
+function drawIcon(size, safe = 1) {
   const c = document.createElement('canvas');
   c.width = c.height = size;
-  const g = c.getContext('2d'), u = size / 180;
+  const g = c.getContext('2d'), u = size / 180 * safe;
   g.fillStyle = '#E8E6E1'; g.fillRect(0, 0, size, size);
+  g.translate(size * (1 - safe) / 2, size * (1 - safe) / 2);    // maskable: keep art in the safe zone
   // display window
   g.fillStyle = '#1B1C1E';
   const r = (x, y, w, h, rad) => { g.beginPath(); g.moveTo(x + rad, y); g.arcTo(x + w, y, x + w, y + h, rad); g.arcTo(x + w, y + h, x, y + h, rad); g.arcTo(x, y + h, x, y, rad); g.arcTo(x, y, x + w, y, rad); g.closePath(); };
@@ -4154,21 +4292,6 @@ function drawIcon(size) {
   g.beginPath(); g.moveTo(128 * u, 118 * u); g.lineTo(128 * u, 138 * u); g.lineTo(144 * u, 128 * u); g.closePath(); g.fill();
   return c;
 }
-(function installIcons() {
-  try {
-    const ico = drawIcon(180).toDataURL('image/png');
-    $('#touchIcon').href = ico;
-    const big = drawIcon(512).toDataURL('image/png');
-    const base = location.href.split('#')[0];
-    const manifest = {
-      name: 'MP-1', short_name: 'MP-1', start_url: base, scope: base.replace(/[^/]*$/, ''),
-      display: 'standalone', orientation: 'portrait', background_color: '#B4AFA7', theme_color: '#B4AFA7',
-      icons: [{ src: big, sizes: '512x512', type: 'image/png', purpose: 'any' }],
-    };
-    $('#manifestLink').href = 'data:application/manifest+json,' + encodeURIComponent(JSON.stringify(manifest));
-  } catch (e) { /* icons are cosmetic */ }
-})();
-
 /* key faces glow while their function is active */
 listeners.push(() => {
   KEYS.play.el.classList.toggle('active', S.playing);
@@ -4322,14 +4445,16 @@ setInterval(() => { if (!document.hidden) Engine.sync(); }, 1000);
 setInterval(() => Player.tick(), XFADE_TICK_MS);
 
 /* offline shell when hosted next to sw.js (optional; fails quietly elsewhere) */
-if ('serviceWorker' in navigator && location.protocol === 'https:') {
-  try { navigator.serviceWorker.register('sw.js').catch(() => {}); } catch (e) {}
+if ('serviceWorker' in navigator && window.isSecureContext && /^https?:$/.test(location.protocol)) {
+  try { navigator.serviceWorker.register(`sw.js?v=${APP_VERSION}`).catch(() => {}); } catch (e) {}
 }
+/* boot-time health: ask to keep our storage, warn when it runs low */
+setTimeout(() => { if (S.tracks.length) Disk.persist(); Disk.check(true); }, 4000);
 
 /* debug/test hooks (harmless in production) */
 window.__mp1 = { S, LCD, powerOn, commit, overlay, toast, render: () => { LCD.dirty = true; renderDisplay(now()); },
   step: (ms) => { for (let i = 0; i < ms / 16.67; i++) for (const a of anims) if (a(1 / 60, now()) === false) anims.delete(a); },
-  Enc, KEYS, Nav, App, Library, Player, Engine, DB, Covers, Tags, readMeta, Spec, Wave, Store, fault, OV, THEMES, Shift, Queue, Sleep, Search, Lists, VIEWS, Access, FX, freezeBoot: ms => { bootFreeze = ms; LCD.dirty = true; } };
+  Enc, KEYS, Nav, App, Library, Player, Engine, DB, Covers, Tags, readMeta, Spec, Wave, Store, fault, OV, THEMES, Shift, Queue, Sleep, Search, Lists, VIEWS, Access, FX, Disk, Backup, freezeBoot: ms => { bootFreeze = ms; LCD.dirty = true; } };
 window.__errs = [];
 addEventListener('error', e => window.__errs.push(String(e.message)));
 </script>
