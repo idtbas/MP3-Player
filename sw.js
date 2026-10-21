@@ -18,14 +18,25 @@ self.addEventListener('activate', e => {
     .then(() => self.clients.claim()));
 });
 
-// only the app's own files are handled: cache first, refreshed in the
-// background (stale-while-revalidate). Everything else goes to the network.
+// only the app's own files are handled. The page itself goes to the network
+// first (revalidated, so a new version arrives on the very next launch) and
+// falls back to the cache when offline or slow; icons and the manifest are
+// served from the cache and refreshed in the background.
+// Everything else goes to the network.
+const PAGE_WAIT_MS = 3000;
 const shellPaths = () => new Set(SHELL.map(u => new URL(u, self.registration.scope).pathname));
+const pagePaths = () => new Set(['./', './index.html'].map(u => new URL(u, self.registration.scope).pathname));
 self.addEventListener('fetch', e => {
   const req = e.request, url = new URL(req.url);
   if (req.method !== 'GET' || url.origin !== self.location.origin || !shellPaths().has(url.pathname)) return;
   e.respondWith(caches.open(CACHE).then(async c => {
     const hit = await c.match(req, { ignoreSearch: true });
+    if (req.mode === 'navigate' || pagePaths().has(url.pathname)) {
+      const net = fetch(req, { cache: 'no-cache' }).then(r => { if (r.ok) c.put(req, r.clone()); return r; });
+      if (!hit) return net.catch(() => Response.error());
+      const late = new Promise(res => setTimeout(() => res(hit), PAGE_WAIT_MS));
+      return Promise.race([net.catch(() => hit), late]);
+    }
     const net = fetch(req).then(r => { if (r.ok) c.put(req, r.clone()); return r; }).catch(() => hit || Response.error());
     return hit || net;
   }));

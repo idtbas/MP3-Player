@@ -103,7 +103,8 @@ quota runs low and refuses imports that would not fit.
 
 Any static host. With GitHub Pages: deploy the branch holding `index.html`,
 `sw.js`, `manifest.webmanifest` and `icons/`. In Safari: Share → Add to Home Screen.
-The service worker is versioned by the app version and only caches the shell.
+The service worker is versioned by the app version and only caches the shell;
+the page itself is fetched from the network first, so updates arrive on the next launch.
 
 ## iOS limits (honest)
 
@@ -141,6 +142,10 @@ at 60 fps there at 1× density. iOS Safari composites canvases on the GPU; run
 the self test on the phone for its number.
 
 ## Changelog
+
+**2.1.1**
+- The page is fetched network-first by the service worker: a new version
+  arrives on the next launch instead of the second (offline still works).
 
 **2.1.0** — a tool in your pocket
 - Hold 03–06 and turn 10: SPACE, FILTER, PITCH, LOOP; hold and push resets.
