@@ -605,7 +605,7 @@ function fitDevice() {
   // centre inside the safe area, not the raw viewport
   root.setProperty('--dy', ((t - b) / 2).toFixed(1) + 'px');
 }
-addEventListener('resize', fitDevice);
+
 fitDevice();
 
 /* ---------- 2. matte texture (generated once, tiled) -------------------- */
@@ -649,28 +649,683 @@ fitDevice();
   svg.append(m);
 })();
 
-/* ---------- 4. static encoder pose for the layout milestone ------------ */
-(function poseEncoder(angleDeg) {
-  const a = angleDeg * Math.PI / 180;
-  $('#encKnurl').style.transform = `rotate(${angleDeg}deg)`;
-  $('#encDot').style.transform = `translate(${Math.sin(a) * 78}px, ${-Math.cos(a) * 78}px)`;
-  $('#encDimple').style.transform = `translate(${Math.sin(a + 2.2) * 56}px, ${-Math.cos(a + 2.2) * 56}px)`;
-})(-28);
+/* ---------- 4. store ----------------------------------------------------
+   One small mutable store. Anything that changes calls commit(), which marks
+   the display dirty, refreshes LEDs and schedules a (throttled) save.      */
+const PERSIST_KEY = 'mp1.state.v1';
+const S = {
+  power: 'off',            // off | boot | on
+  screen: 'empty',         // now | empty | list
+  tracks: [],              // library meta, in play order of the library
+  cur: -1,                 // index into tracks
+  playing: false,
+  t: 0, dur: 0,            // seconds
+  vol: 0.8,                // 0..1 (DSP output)
+  shuffle: false,
+  repeat: 0,               // 0 off, 1 all, 2 one
+  encMode: 0,              // 0 VOL, 1 SEEK, 2 SCRL
+  hold: false,
+  wireless: false, wirelessAvail: false,
+  set: { sound: true, haptics: true, bright: 4, theme: 0, out: 'dsp' },
+  resumeId: null, resumeT: 0,
+};
+function loadPersisted() {
+  try {
+    const raw = localStorage.getItem(PERSIST_KEY);
+    if (!raw) return;
+    const p = JSON.parse(raw);
+    if (p.set) Object.assign(S.set, p.set);
+    if (typeof p.vol === 'number') S.vol = clamp(p.vol, 0, 1);
+    S.shuffle = !!p.shuffle;
+    S.repeat = [0, 1, 2].includes(p.repeat) ? p.repeat : 0;
+    S.encMode = [0, 1, 2].includes(p.encMode) ? p.encMode : 0;
+    S.resumeId = p.curId || null;
+    S.resumeT = +p.t || 0;
+  } catch (e) { /* private mode or corrupt: run with defaults */ }
+}
+let saveTimer = 0;
+function savePersisted(immediate) {
+  clearTimeout(saveTimer);
+  const doSave = () => {
+    try {
+      const tr = S.tracks[S.cur];
+      localStorage.setItem(PERSIST_KEY, JSON.stringify({
+        set: S.set, vol: S.vol, shuffle: S.shuffle, repeat: S.repeat, encMode: S.encMode,
+        curId: tr ? tr.id : S.resumeId, t: tr ? S.t : S.resumeT,
+      }));
+    } catch (e) { /* storage full / blocked: not fatal */ }
+  };
+  if (immediate) doSave(); else saveTimer = setTimeout(doSave, 600);
+}
+const listeners = [];
+function commit() {
+  for (const fn of listeners) fn();
+  LCD.dirty = true;
+  savePersisted();
+}
+loadPersisted();
 
-/* ---------- 5. HOLD/SND switch rest positions -------------------------- */
-$('#swSnd .sw__thumb').style.transform = 'translateX(17px)';
+/* ---------- 5. UI sound synth (Web Audio, dry + short) ------------------ */
+const Snd = {
+  ctx: null, bus: null, noise: null,
+  init() {
+    if (this.ctx) return this.ctx;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    try {
+      this.ctx = new AC({ latencyHint: 'interactive' });
+    } catch (e) { try { this.ctx = new AC(); } catch (e2) { return null; } }
+    const c = this.ctx;
+    this.bus = c.createGain();
+    this.bus.gain.value = 0.32;            // UI sits well under the music
+    this.bus.connect(c.destination);
+    const len = Math.floor(c.sampleRate * 0.25);
+    this.noise = c.createBuffer(1, len, c.sampleRate);
+    const d = this.noise.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    return c;
+  },
+  unlock() {
+    const c = this.init();
+    if (!c) return;
+    if (c.state !== 'running') c.resume().catch(() => {});
+    // a one-sample silent buffer fully unlocks output on iOS
+    const b = c.createBuffer(1, 1, c.sampleRate), s = c.createBufferSource();
+    s.buffer = b; s.connect(c.destination); s.start(0);
+  },
+  ok() { return this.ctx && S.set.sound && this.ctx.state === 'running'; },
+  burst(t, dur, f, q, gain, type = 'bandpass') {
+    const c = this.ctx, s = c.createBufferSource(), fl = c.createBiquadFilter(), g = c.createGain();
+    s.buffer = this.noise;
+    fl.type = type; fl.frequency.value = f; fl.Q.value = q;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(gain, t + 0.0008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    s.connect(fl); fl.connect(g); g.connect(this.bus);
+    s.start(t, Math.random() * 0.2); s.stop(t + dur + 0.01);
+  },
+  tone(t, f0, f1, dur, gain, type = 'sine') {
+    const c = this.ctx, o = c.createOscillator(), g = c.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(f0, t);
+    if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(gain, t + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(this.bus);
+    o.start(t); o.stop(t + dur + 0.02);
+  },
+  keyDown(heavy) {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.burst(t, 0.014, 2600, 1.1, 0.55);
+    this.tone(t, heavy ? 150 : 210, heavy ? 90 : 120, 0.04, heavy ? 0.42 : 0.3);
+  },
+  keyUp() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.burst(t, 0.008, 5200, 0.8, 0.22, 'highpass');
+    this.tone(t, 520, 380, 0.012, 0.06);
+  },
+  tick(mode) {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    const f = [3400, 2600, 4200][mode | 0] || 3400;
+    this.burst(t, 0.005, f, 2.5, 0.45);
+    this.tone(t, f * 0.5, f * 0.5, 0.004, 0.035, 'square');
+  },
+  thunk() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone(t, 130, 62, 0.07, 0.5);
+    this.burst(t, 0.025, 900, 0.7, 0.35, 'lowpass');
+    this.burst(t + 0.002, 0.006, 4200, 1.5, 0.2);
+  },
+  blip(f = 1320, d = 0.035, g = 0.12) {
+    if (!this.ok()) return;
+    this.tone(this.ctx.currentTime, f, f, d, g, 'triangle');
+  },
+  err() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone(t, 118, 118, 0.07, 0.16, 'square');
+    this.tone(t + 0.09, 92, 92, 0.09, 0.16, 'square');
+  },
+  chime() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime + 0.01;
+    // three bright bells, then a soft fifth underneath — short and dry
+    [[1046.5, 0], [1568, 0.085], [2093, 0.17]].forEach(([f, dt]) => {
+      this.tone(t + dt, f, f, 0.32, 0.11, 'triangle');
+      this.tone(t + dt, f * 2.01, f * 2.01, 0.09, 0.025, 'sine');
+    });
+    this.tone(t + 0.26, 523.25, 523.25, 0.55, 0.07, 'sine');
+    this.tone(t + 0.26, 784, 784, 0.5, 0.05, 'sine');
+  },
+  connect() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone(t, 880, 880, 0.05, 0.1, 'triangle');
+    this.tone(t + 0.07, 1318.5, 1318.5, 0.09, 0.1, 'triangle');
+  },
+  disconnect() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone(t, 1318.5, 1318.5, 0.05, 0.09, 'triangle');
+    this.tone(t + 0.07, 880, 880, 0.09, 0.09, 'triangle');
+  },
+};
 
-/* ---------- 6. placeholder: lit dot grid on the display ----------------- */
-(function testPattern() {
-  const cv = $('#lcd'), g = cv.getContext('2d');
-  const W = 160, H = 92, p = 6;
-  cv.width = W * p; cv.height = H * p;
-  g.fillStyle = '#0D0E0F'; g.fillRect(0, 0, cv.width, cv.height);
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    g.fillStyle = 'rgba(255,255,255,.045)';
-    g.fillRect(x * p, y * p, p - 1, p - 1);
+/* ---------- 6. haptics (iOS 18+ <input switch> trick, silent elsewhere) -- */
+const Hap = {
+  label: $('#hapticLabel'),
+  supported: 'switch' in HTMLInputElement.prototype || /iP(hone|ad|od)/.test(navigator.userAgent),
+  tap() {
+    if (!S.set.haptics || !this.supported) return;
+    try { this.label.click(); } catch (e) { /* no haptics here */ }
+  },
+};
+$('#hapticSwitch').addEventListener('click', e => e.stopPropagation());
+
+/* ---------- 7. LEDs ----------------------------------------------------- */
+const LED = {
+  el: {
+    pwr: $('#ledPwr'), play: $('#ledPlay'), air: $('#ledAir'), shuf: $('#ledShuf'), rpt: $('#ledRpt'),
+    vol: $('#ledVol'), seek: $('#ledSeek'), scrl: $('#ledScrl'),
+  },
+  state: {},
+  set(name, mode) {
+    if (this.state[name] === mode) return;
+    this.state[name] = mode;
+    const el = this.el[name];
+    el.classList.remove('on', 'dim', 'blink', 'breathe');
+    if (mode && mode !== 'off') el.classList.add(mode);
+  },
+  override: null,              // boot chase takes over temporarily
+  sync() {
+    if (this.override) return;
+    if (S.power !== 'on') {
+      for (const k in this.el) this.set(k, 'off');
+      this.set('pwr', S.power === 'off' ? 'breathe' : 'on');
+      return;
+    }
+    this.set('pwr', 'on');
+    this.set('play', S.playing ? 'on' : (S.cur >= 0 ? 'dim' : 'off'));
+    this.set('air', S.wireless ? 'on' : 'off');
+    this.set('shuf', S.shuffle ? 'on' : 'off');
+    this.set('rpt', S.repeat === 1 ? 'on' : S.repeat === 2 ? 'blink' : 'off');
+    const m = S.screen === 'list' ? 2 : S.encMode;
+    this.set('vol', m === 0 ? 'on' : 'off');
+    this.set('seek', m === 1 ? 'on' : 'off');
+    this.set('scrl', m === 2 ? 'on' : 'off');
+  },
+};
+listeners.push(() => LED.sync());
+
+/* ---------- 8. dot-matrix display: framebuffer + primitives ------------- */
+const LW = 160, LH = 92;
+const FB = new Uint8Array(LW * LH);   // 0 off · 1 dim · 2 lit · 3 accent
+let cx0 = 0, cy0 = 0, cx1 = LW, cy1 = LH;
+const clip = (x0, y0, x1, y1) => { cx0 = Math.max(0, x0); cy0 = Math.max(0, y0); cx1 = Math.min(LW, x1); cy1 = Math.min(LH, y1); };
+const noClip = () => { cx0 = 0; cy0 = 0; cx1 = LW; cy1 = LH; };
+function px(x, y, v) {
+  x |= 0; y |= 0;
+  if (x < cx0 || y < cy0 || x >= cx1 || y >= cy1) return;
+  FB[y * LW + x] = v;
+}
+function rect(x, y, w, h, v) {
+  const xa = Math.max(cx0, x | 0), ya = Math.max(cy0, y | 0);
+  const xb = Math.min(cx1, (x + w) | 0), yb = Math.min(cy1, (y + h) | 0);
+  for (let j = ya; j < yb; j++) FB.fill(v, j * LW + xa, j * LW + Math.max(xa, xb));
+}
+const hline = (x, y, w, v) => rect(x, y, w, 1, v);
+const vline = (x, y, h, v) => rect(x, y, 1, h, v);
+function frameRect(x, y, w, h, v) { hline(x, y, w, v); hline(x, y + h - 1, w, v); vline(x, y, h, v); vline(x + w - 1, y, h, v); }
+function dots(x, y, w, v, step = 2) { for (let i = 0; i < w; i += step) px(x + i, y, v); }
+function invert(x, y, w, h) {
+  for (let j = Math.max(cy0, y); j < Math.min(cy1, y + h); j++)
+    for (let i = Math.max(cx0, x); i < Math.min(cx1, x + w); i++) {
+      const k = j * LW + i; FB[k] = FB[k] ? 0 : 2;
+    }
+}
+
+/* fonts: 5x7 (advance 6) and 3x5 (advance 4), hand-set bitmaps ----------- */
+const F5 = { w: 5, h: 7, adv: 6, g: {} }, F3 = { w: 3, h: 5, adv: 4, g: {} };
+(function buildFonts() {
+  const f5 = {
+    ' ': '00000000000000', '!': '04040404000004', '"': '0A0A0A00000000', '#': '0A0A1F0A1F0A0A',
+    '$': '040F140E051E04', '%': '18190204081303', '&': '0C12140815120D', "'": '0C040800000000',
+    '(': '02040808080402', ')': '08040202020408', '*': '0004150E150400', '+': '0004041F040400',
+    ',': '000000000C0408', '-': '0000001F000000', '.': '00000000000C0C', '/': '00010204081000',
+    '0': '0E11111111110E', '1': '040C040404040E', '2': '0E11010204081F', '3': '1F02040201110E',
+    '4': '02060A121F0202', '5': '1F101E0101110E', '6': '0608101E11110E', '7': '1F010204080808',
+    '8': '0E11110E11110E', '9': '0E11110F01020C', ':': '000C0C000C0C00', ';': '000C0C000C0408',
+    '<': '02040810080402', '=': '00001F001F0000', '>': '08040201020408', '?': '0E110102040004',
+    '@': '0E11010D15150E', 'A': '0E1111111F1111', 'B': '1E11111E11111E', 'C': '0E11101010110E',
+    'D': '1C12111111121C', 'E': '1F10101E10101F', 'F': '1F10101E101010', 'G': '0E11101711110F',
+    'H': '1111111F111111', 'I': '0E04040404040E', 'J': '0702020202120C', 'K': '11121418141211',
+    'L': '1010101010101F', 'M': '111B1515111111', 'N': '11111915131111', 'O': '0E11111111110E',
+    'P': '1E11111E101010', 'Q': '0E11111115120D', 'R': '1E11111E141211', 'S': '0F10100E01011E',
+    'T': '1F040404040404', 'U': '1111111111110E', 'V': '11111111110A04', 'W': '1111111515150A',
+    'X': '11110A040A1111', 'Y': '1111110A040404', 'Z': '1F01020408101F', '[': '0E08080808080E',
+    '\\': '00100804020100', ']': '0E02020202020E', '^': '040A1100000000', '_': '0000000000001F',
+    '|': '04040404040404', '·': '00000004000000', '~': '00000815020000',
+  };
+  for (const k in f5) {
+    const s = f5[k], rows = new Uint8Array(7);
+    for (let i = 0; i < 7; i++) rows[i] = parseInt(s.substr(i * 2, 2), 16);
+    F5.g[k] = rows;
+  }
+  const f3 = {
+    ' ': '00000', '0': '75557', '1': '26227', '2': '71747', '3': '71317', '4': '55711', '5': '74717',
+    '6': '74757', '7': '71122', '8': '75757', '9': '75717', 'A': '25755', 'B': '65656', 'C': '34443',
+    'D': '65556', 'E': '74647', 'F': '74644', 'G': '34553', 'H': '55755', 'I': '72227', 'J': '11152',
+    'K': '55655', 'L': '44447', 'M': '57555', 'N': '65555', 'O': '25552', 'P': '65644', 'Q': '25563',
+    'R': '65655', 'S': '34216', 'T': '72222', 'U': '55557', 'V': '55552', 'W': '55575', 'X': '55255',
+    'Y': '55222', 'Z': '71247', '.': '00002', ',': '00024', ':': '02020', '-': '00700', '+': '02720',
+    '/': '11244', '%': '51245', '>': '42124', '<': '12421', '(': '24442', ')': '42224', '!': '22202',
+    '?': '61202', '#': '57575', '&': '25253', "'": '22000', '"': '55000', '_': '00007', '=': '07070',
+    '*': '05250', '[': '64446', ']': '32223', '·': '00200', '@': '75747', '|': '22222',
+  };
+  for (const k in f3) {
+    const s = f3[k], rows = new Uint8Array(5);
+    for (let i = 0; i < 5; i++) rows[i] = parseInt(s[i], 8);
+    F3.g[k] = rows;
   }
 })();
+
+/* Display text is uppercase ASCII; accents are folded, unknown glyphs dotted. */
+function norm(s) {
+  return String(s == null ? '' : s)
+    .replace(/ß/g, 'ss').replace(/[Ææ]/g, 'AE').replace(/[Øø]/g, 'O').replace(/[Œœ]/g, 'OE')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[‘’´`]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, '-')
+    .toUpperCase();
+}
+const textW = (s, f = F5, sc = 1) => (s.length ? s.length * f.adv - 1 : 0) * sc;
+function text(s, x, y, f = F5, v = 2, sc = 1) {
+  s = norm(s);
+  let cx = x | 0;
+  for (const ch of s) {
+    const rows = f.g[ch] || f.g['·'];
+    if (cx + f.w * sc >= cx0 && cx < cx1) {
+      for (let r = 0; r < f.h; r++) {
+        const bits = rows[r];
+        if (!bits) continue;
+        for (let c = 0; c < f.w; c++) {
+          if (bits & (1 << (f.w - 1 - c))) {
+            if (sc === 1) px(cx + c, y + r, v);
+            else rect(cx + c * sc, y + r * sc, sc, sc, v);
+          }
+        }
+      }
+    }
+    cx += f.adv * sc;
+  }
+  return cx - x - sc;
+}
+const textC = (s, cxm, y, f = F5, v = 2, sc = 1) => text(s, Math.round(cxm - textW(norm(s), f, sc) / 2), y, f, v, sc);
+const textR = (s, xr, y, f = F5, v = 2) => text(s, xr - textW(norm(s), f), y, f, v);
+/* horizontally scrolling label inside [x, x+w) — returns true while moving */
+function marquee(s, x, y, w, f, v, t, speed = 22) {
+  s = norm(s);
+  const tw = textW(s, f);
+  const ox0 = cx0, ox1 = cx1;
+  clip(Math.max(x, ox0), cy0, Math.min(x + w, ox1), cy1);
+  let moving = false;
+  if (tw <= w) text(s, x, y, f, v);
+  else {
+    const gap = 24, period = tw + gap;
+    const hold = 1.2;                               // rest at the start
+    const cyc = period / speed + hold;
+    const ph = (t % cyc);
+    const off = ph < hold ? 0 : Math.floor((ph - hold) * speed);
+    text(s, x - off, y, f, v);
+    text(s, x - off + period, y, f, v);
+    moving = true;
+  }
+  cx0 = ox0; cx1 = ox1;
+  return moving;
+}
+
+/* pixel icons ------------------------------------------------------------ */
+const ICON = {};
+(function buildIcons() {
+  const src = {
+    play:  ['X....', 'XX...', 'XXX..', 'XXXX.', 'XXX..', 'XX...', 'X....'],
+    pause: ['XX.XX', 'XX.XX', 'XX.XX', 'XX.XX', 'XX.XX', 'XX.XX', 'XX.XX'],
+    stop:  ['.....', 'XXXXX', 'XXXXX', 'XXXXX', 'XXXXX', 'XXXXX', '.....'],
+    shuf:  ['.....X.', 'XX...XX', '..X.XX.', '...X...', '..X.XX.', 'XX...XX', '.....X.'],
+    rpt:   ['.....X.', '.XXXXXX', 'X....X.', 'X.....X', '.X....X', 'XXXXXX.', '.X.....'],
+    air:   ['.XXXXX.', 'X.....X', '..XXX..', '.X...X.', '.......', '...X...', '.......'],
+    lock:  ['.XXX.', 'X...X', 'X...X', 'XXXXX', 'XX.XX', 'XX.XX', 'XXXXX'],
+    spk:   ['...X', '..XX', 'XXXX', 'XXXX', 'XXXX', '..XX', '...X'],
+    note:  ['..XXX', '..X.X', '..X..', '..X..', 'XXX..', 'XXX..', '.....'],
+    arrR:  ['X..', 'XX.', 'XXX', 'XX.', 'X..'],
+    arrL:  ['..X', '.XX', 'XXX', '.XX', '..X'],
+    arrU:  ['..X..', '.XXX.', 'XXXXX'],
+    arrD:  ['XXXXX', '.XXX.', '..X..'],
+    plus:  ['..X..', '..X..', 'XXXXX', '..X..', '..X..'],
+    ff:    ['X...X...', 'XX..XX..', 'XXX.XXX.', 'XXXXXXXX', 'XXX.XXX.', 'XX..XX..', 'X...X...'],
+    rw:    ['...X...X', '..XX..XX', '.XXX.XXX', 'XXXXXXXX', '.XXX.XXX', '..XX..XX', '...X...X'],
+  };
+  for (const k in src) {
+    const rows = src[k];
+    ICON[k] = { w: rows[0].length, h: rows.length, rows };
+  }
+})();
+function icon(name, x, y, v = 2) {
+  const ic = ICON[name];
+  for (let r = 0; r < ic.h; r++)
+    for (let c = 0; c < ic.w; c++)
+      if (ic.rows[r][c] === 'X') px(x + c, y + r, v);
+  return ic.w;
+}
+function circle(cx, cy, r, v) {      // midpoint circle outline
+  let x = r, y = 0, e = 1 - r;
+  while (x >= y) {
+    px(cx + x, cy + y, v); px(cx + y, cy + x, v); px(cx - y, cy + x, v); px(cx - x, cy + y, v);
+    px(cx - x, cy - y, v); px(cx - y, cy - x, v); px(cx + y, cy - x, v); px(cx + x, cy - y, v);
+    y++;
+    if (e < 0) e += 2 * y + 1; else { x--; e += 2 * (y - x) + 1; }
+  }
+}
+
+/* ---------- 9. display renderer: framebuffer -> glass ------------------- */
+const THEMES = [
+  // name, glass bg, unlit dot, lit, accent, glow
+  { name: 'MONO',  bg: '#0B0C0D', unlit: '#17181A', lit: [242, 238, 229], acc: [255, 90, 28],  glow: 0.42 },
+  { name: 'AMBER', bg: '#0C0A08', unlit: '#1A1410', lit: [255, 108, 34], acc: [255, 226, 205], glow: 0.5 },
+  { name: 'LCD',   bg: '#ADAEA6', unlit: '#A4A59D', lit: [30, 31, 34],   acc: [226, 70, 14],   glow: 0 },
+];
+const LCD = {
+  cv: $('#lcd'), g: null, low: null, lowG: null, img: null, mask: null, P: 6,
+  dirty: true, anim: false, flickerUntil: 0, pal: null,
+  resize(dpr, s) {
+    // dot pitch in device pixels; canvas is sized so one dot = P device px
+    const P = Math.max(3, Math.floor(2 * dpr * s + 0.02));
+    this.P = P;
+    const cv = this.cv;
+    cv.width = LW * P; cv.height = LH * P;
+    const cssW = LW * P / (dpr * s), cssH = LH * P / (dpr * s);
+    cv.style.width = cssW + 'px'; cv.style.height = cssH + 'px';
+    cv.style.left = ((320 - cssW) / 2) + 'px'; cv.style.top = ((192 - cssH) / 2) + 'px';
+    this.g = cv.getContext('2d', { alpha: false });
+    if (!this.low) {
+      this.low = document.createElement('canvas');
+      this.low.width = LW; this.low.height = LH;
+      this.lowG = this.low.getContext('2d');
+      this.img = this.lowG.createImageData(LW, LH);
+    }
+    this.buildMask();
+    this.dirty = true;
+  },
+  buildMask() {
+    const P = this.P, th = THEMES[S.set.theme] || THEMES[0];
+    const m = this.mask || (this.mask = document.createElement('canvas'));
+    m.width = LW * P; m.height = LH * P;
+    const g = m.getContext('2d');
+    g.clearRect(0, 0, m.width, m.height);
+    g.fillStyle = th.bg;
+    g.fillRect(0, 0, m.width, m.height);
+    const gap = Math.max(1, Math.round(P * 0.17));
+    for (let y = 0; y < LH; y++) for (let x = 0; x < LW; x++)
+      g.clearRect(x * P, y * P, P - gap, P - gap);
+    $('#glass').style.setProperty('--lcd-bg', th.bg);
+    this.palette();
+  },
+  palette() {
+    const th = THEMES[S.set.theme] || THEMES[0];
+    const b = [0.42, 0.56, 0.7, 0.85, 1][clamp(S.set.bright, 1, 5) - 1];
+    const lcdTheme = th.glow === 0;
+    // on the reflective LCD, "brightness" is contrast; on emissive themes it's light
+    const mix = (c, k) => lcdTheme ? c.map((v, i) => Math.round(lerp(parseInt(th.unlit.substr(1 + i * 2, 2), 16), v, k))) : c.map(v => Math.round(v * k));
+    this.pal = [
+      [0, 0, 0, 0],
+      [...mix(th.lit, b * (lcdTheme ? 0.42 : 0.34)), 255],
+      [...mix(th.lit, b), 255],
+      [...mix(th.acc, lcdTheme ? Math.max(0.75, b) : b), 255],
+    ];
+    this.theme = th;
+    this.dirty = true;
+  },
+  blit(t) {
+    const d = this.img.data, pal = this.pal;
+    for (let i = 0, j = 0; i < FB.length; i++, j += 4) {
+      const c = pal[FB[i]];
+      d[j] = c[0]; d[j + 1] = c[1]; d[j + 2] = c[2]; d[j + 3] = c[3];
+    }
+    this.lowG.putImageData(this.img, 0, 0);
+    const g = this.g, W = this.cv.width, H = this.cv.height, th = this.theme;
+    g.globalAlpha = 1;
+    g.fillStyle = S.power === 'off' ? th.bg : th.unlit;
+    g.fillRect(0, 0, W, H);
+    let a = 1, oy = 0;
+    if (t < this.flickerUntil) {          // track-change flicker + line jitter
+      a = 0.55 + Math.random() * 0.45;
+      oy = Math.random() < 0.3 ? this.P : 0;
+    }
+    if (th.glow) {
+      g.imageSmoothingEnabled = true;
+      g.globalAlpha = th.glow * a;
+      g.drawImage(this.low, 0, oy, W, H);
+    }
+    g.imageSmoothingEnabled = false;
+    g.globalAlpha = a;
+    g.drawImage(this.low, 0, oy, W, H);
+    g.globalAlpha = th.glow ? 0.92 : 1;
+    g.drawImage(this.mask, 0, 0);
+  },
+  flicker(ms = 140) { this.flickerUntil = now() + ms; },
+};
+
+/* ---------- 10. toasts / overlays --------------------------------------- */
+const OV = { kind: null, until: 0, a: null, b: null, start: 0 };
+function overlay(kind, a, b, ms = 1100) {
+  OV.kind = kind; OV.a = a; OV.b = b; OV.start = now(); OV.until = OV.start + ms;
+  LCD.dirty = true;
+}
+function toast(a, b, ms) { overlay('toast', a, b, ms); }
+
+function drawOverlay(t) {
+  if (!OV.kind) return false;
+  if (t > OV.until) { OV.kind = null; LCD.dirty = true; return false; }
+  const age = (t - OV.start) / 1000;
+  if (OV.kind === 'toast') {
+    const l1 = norm(OV.a), l2 = OV.b ? norm(OV.b) : '';
+    const w = Math.max(textW(l1, F5), textW(l2, F3)) + 14;
+    const h = l2 ? 23 : 15;
+    const x = Math.round((LW - w) / 2), y = Math.round((LH - h) / 2);
+    rect(x - 1, y - 1, w + 2, h + 2, 0);
+    frameRect(x, y, w, h, 2);
+    textC(l1, LW / 2, y + 4, F5, 2);
+    if (l2) textC(l2, LW / 2, y + 14, F3, 3);
+  } else if (OV.kind === 'hold') {
+    const x = 50, y = 22, w = 60, h = 46;
+    rect(x - 1, y - 1, w + 2, h + 2, 0);
+    frameRect(x, y, w, h, 2);
+    // big padlock, drawn at 3x
+    const ic = ICON.lock;
+    for (let r = 0; r < ic.h; r++) for (let c = 0; c < ic.w; c++)
+      if (ic.rows[r][c] === 'X') rect(x + 23 + c * 3, y + 6 + r * 3, 3, 3, 3);
+    textC(OV.a ? 'HOLD' : 'HOLD OFF', LW / 2, y + 33, F5, 2);
+  }
+  return true;
+}
+
+/* ---------- 11. screens -------------------------------------------------- */
+const fmtTime = s => {
+  s = Math.max(0, Math.floor(s || 0));
+  const m = Math.floor(s / 60), r = s % 60;
+  return (m < 10 ? '0' : '') + m + ':' + (r < 10 ? '0' : '') + r;
+};
+const two = n => (n < 10 ? '0' : '') + n;
+
+function statusBar(t, title) {
+  // left: transport state + track counter (or a screen title)
+  if (title) {
+    text(title, 0, 1, F3, 2);
+  } else {
+    icon(S.playing ? 'play' : (S.cur >= 0 ? 'pause' : 'stop'), 0, 0, S.playing ? 3 : 2);
+    const n = S.tracks.length;
+    text(n ? `${two(S.cur + 1)}/${two(n)}` : '--/--', 9, 1, F3, 2);
+  }
+  // middle: encoder mode tag (inverted chip) or HOLD
+  if (S.hold) {
+    icon('lock', 66, 0, 3); text('HOLD', 73, 1, F3, 3);
+  } else if (!title) {
+    const tag = ['VOL', 'SEEK', 'SCRL'][S.encMode];
+    const w = textW(tag, F3) + 4, x = 80 - Math.round(w / 2);
+    rect(x, 0, w, 7, 2); text(tag, x + 2, 1, F3, 0);
+  }
+  // right: shuffle · repeat · wireless (dim when off)
+  icon('shuf', 128, 0, S.shuffle ? 2 : 1);
+  icon('rpt', 138, 0, S.repeat ? 2 : 1);
+  if (S.repeat === 2) text('1', 146, 2, F3, 3);
+  icon('air', 153, 0, S.wireless ? 3 : 1);
+  dots(0, 8, LW, 1, 2);
+}
+
+/* standby: glass dark, a single dim prompt */
+function drawStandby(t) {
+  const blinkOn = (t % 1600) < 1000;
+  textC('TOUCH TO POWER ON', LW / 2, 43, F3, blinkOn ? 1 : 0);
+  return true;
+}
+
+/* boot sequence — returns false when finished */
+const BOOT_MS = 2300;
+let bootStart = 0, bootFreeze = null;
+function drawBoot(t) {
+  const b = bootFreeze != null ? bootFreeze : t - bootStart;
+  if (b < 90) { rect(0, 0, LW, LH, 2); return true; }                 // lamp test
+  if (b < 200) return true;
+  if (b < 720) {                                                        // pixel sweep
+    const x = Math.floor((b - 200) / 520 * (LW + 8));
+    for (let y = 0; y < LH; y++) for (let i = 0; i < Math.min(x, LW); i++)
+      if (((i + y) & 1) === 0 && ((i * 7 + y * 13) % 11) > (x - i) / 8) px(i, y, 1);
+    rect(x, 0, 3, LH, 3);
+    return true;
+  }
+  if (b < 840) return true;
+  // logo with blink, then tagline + progress
+  const blinkOff = (b > 1040 && b < 1120) || (b > 1240 && b < 1300);
+  if (!blinkOff) textC('MP-1', LW / 2, 18, F5, 2, 4);
+  if (b > 1300) textC('PORTABLE AUDIO PLAYER', LW / 2, 54, F3, 1);
+  if (b > 1420) {
+    const p = clamp((b - 1420) / 620, 0, 1);
+    frameRect(40, 66, 80, 5, 1);
+    rect(41, 67, Math.round(78 * p), 3, 2);
+    textC(p < 1 ? 'LOADING LIBRARY' : (S.tracks.length ? `${S.tracks.length} SONGS` : 'READY'), LW / 2, 76, F3, p < 1 ? 1 : 3);
+  }
+  if (b > 2120) {                                                       // blinds out
+    const k = Math.floor((b - 2120) / 180 * 8);
+    for (let y = 0; y < LH; y++) if ((y % 8) < k) hline(0, y, LW, 0);
+  }
+  return b < BOOT_MS;
+}
+
+/* empty library: friendly prompt */
+function drawEmpty(t) {
+  statusBar(t);
+  // dotted cassette-ish slot with a plus, blinking softly
+  const on = (t % 1400) < 900;
+  frameRect(58, 16, 44, 30, 1);
+  for (let i = 0; i < 44; i += 2) { px(58 + i, 16, 2); px(58 + i, 45, 2); }
+  for (let i = 0; i < 30; i += 2) { px(58, 16 + i, 2); px(101, 16 + i, 2); }
+  if (on) { rect(79, 23, 2, 16, 3); rect(72, 30, 16, 2, 3); }
+  textC('NO SONGS', LW / 2, 54, F5, 2);
+  const s1 = 'PRESS ', s2 = '02 ADD';
+  const w = textW(s1 + s2, F3), x = Math.round((LW - w) / 2);
+  text(s1, x, 66, F3, 1);
+  text(s2, x + textW(s1, F3) + 1, 66, F3, 3);
+  icon('arrD', 77, 76, on ? 3 : 1);
+  return true;
+}
+
+/* ---------- 12. frame loop ---------------------------------------------- */
+const anims = new Set();                // per-frame physics steppers (keys, encoder…)
+let lastTs = 0;
+function frame(ts) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.05, (ts - (lastTs || ts)) / 1000);
+  lastTs = ts;
+  for (const a of anims) if (a(dt, ts) === false) anims.delete(a);
+  renderDisplay(ts);
+}
+function renderDisplay(t) {
+  if (!LCD.g) return;
+  if (!LCD.dirty && !LCD.anim && t > LCD.flickerUntil && !OV.kind) return;
+  FB.fill(0); noClip();
+  let anim = false;
+  if (S.power === 'off') anim = drawStandby(t);
+  else if (S.power === 'boot') {
+    anim = drawBoot(t);
+    if (!anim && bootFreeze == null) finishBoot();
+  } else {
+    anim = drawScreen(t);
+    noClip();
+    anim = drawOverlay(t) || anim;
+  }
+  LCD.blit(t);
+  LCD.anim = anim;
+  LCD.dirty = false;
+}
+function drawScreen(t) {
+  if (!S.tracks.length) return drawEmpty(t);
+  return drawEmpty(t);
+}
+
+/* ---------- 13. power on + boot ----------------------------------------- */
+function powerOn() {
+  if (S.power !== 'off') return;
+  Snd.unlock();
+  Hap.tap();
+  S.power = 'boot';
+  bootStart = now();
+  commit();
+  // LED lamp test chase alongside the display boot
+  LED.override = true;
+  const order = ['pwr', 'play', 'air', 'shuf', 'rpt', 'scrl', 'seek', 'vol'];
+  order.forEach((k, i) => {
+    setTimeout(() => LED.set(k, 'on'), 1240 + i * 70);
+    setTimeout(() => LED.set(k, k === 'pwr' ? 'on' : 'off'), 1240 + i * 70 + 260);
+  });
+  LED.set('pwr', 'on');
+  setTimeout(() => Snd.blip(2400, 0.02, 0.06), 200);
+  setTimeout(() => Snd.chime(), 840);
+}
+function finishBoot() {
+  S.power = 'on';
+  LED.override = null;
+  S.screen = S.tracks.length ? 'now' : 'empty';
+  LCD.flicker(120);
+  commit();
+}
+$('#stage').addEventListener('pointerdown', e => {
+  if (S.power === 'off') { e.stopPropagation(); e.preventDefault(); powerOn(); }
+}, true);
+
+/* ---------- 14. iOS page hygiene ---------------------------------------- */
+['gesturestart', 'gesturechange', 'gestureend', 'dblclick', 'contextmenu', 'selectstart'].forEach(ev =>
+  document.addEventListener(ev, e => e.preventDefault(), { passive: false }));
+document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+
+/* ---------- 15. start ---------------------------------------------------- */
+function relayout() {
+  fitDevice();
+  const s = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--s')) || 1;
+  LCD.resize(window.devicePixelRatio || 1, s);
+}
+addEventListener('resize', relayout);
+relayout();
+LED.sync();
+requestAnimationFrame(frame);
+
+/* debug/test hooks (harmless in production) */
+window.__mp1 = { S, LCD, powerOn, commit, overlay, toast, render: () => { LCD.dirty = true; renderDisplay(now()); }, freezeBoot: ms => { bootFreeze = ms; LCD.dirty = true; } };
+window.__errs = [];
+addEventListener('error', e => window.__errs.push(String(e.message)));
 </script>
 </body>
 </html>
