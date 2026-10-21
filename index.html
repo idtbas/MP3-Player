@@ -14,35 +14,76 @@
 <link rel="manifest" id="manifestLink" href="data:,">
 <style>
 /* ==========================================================================
-   MP-1 — portable audio player. Hardware is drawn with CSS + SVG, the
-   display is a canvas dot-matrix. Design units: the device is laid out on a
-   380 x 760 px board and scaled to fit the phone (see fitDevice()).
-   Grid: 22 px side margin, 336 px content, 5 columns of 56 px / 14 px gutter.
+   MP-1 — portable audio player
+   The device is drawn on a 380 × 760 board (design px) and scaled to fit.
+   Grid: 22 px margins, 336 px content, 6 columns of 46 px + 12 px gutters
+   (pitch 58). Column centres: 45 103 161 219 277 335 — mirror-symmetric
+   about x = 190. Light: one source, top-left. Shadows fall to the
+   bottom-right, highlights sit on top-left edges.
    ========================================================================== */
 :root {
-  /* page */
   --page-hi: #D9D5CE;
   --page-lo: #A9A49B;
-  /* device body: light anodised aluminium / off-white */
-  --body: #E6E4DF;
-  --body-edge: #C9C6BF;
-  --face: #EBE9E4;
-  /* graphite ink + greys */
-  --ink: #222326;
-  --ink-2: #4E4F53;
-  --ink-3: #8B8A86;
-  --grey-key: #D5D3CD;
-  --graphite-key: #2B2C2F;
-  /* the one hero accent */
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "DejaVu Sans Mono", monospace;
   --orange: #FF5A1C;
-  --orange-lo: #D8430D;
-  /* status LEDs only */
   --led-green: #49E68F;
   --led-blue: #55B6FF;
-  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "DejaVu Sans Mono", monospace;
-  --noise: none;
+  --grain: none;             /* brushed anodising, generated at start-up */
+  --rubber: none;            /* rubber key speckle, generated at start-up */
   --s: 1;
+  /* label scale: L1 for names, L2 for legends and units */
+  --l1: 7px;
+  --l2: 6px;
   color-scheme: light;
+}
+
+/* ---------- editions: one material system, three anodised finishes ----- */
+.device {
+  --body: #E2E1DD;
+  --cham-hi: #FDFCFA; --cham-mid: #D8D6D1; --cham-lo: #ABA8A1;
+  --hl: rgba(255,255,255,.95);          /* top-left edge highlight */
+  --sh: rgba(40,30,20,.13);             /* bottom-right edge shade */
+  --ink: #232427; --ink-2: #4A4B4F; --ink-3: #8A8984;
+  --hair: #A9A7A2;
+  --engrave: #CCCAC5; --engrave-dk: rgba(0,0,0,.42); --engrave-lt: rgba(255,255,255,1);
+  --well: #CBC9C4;
+  --key-lt: #D6D5D1; --key-lt-ink: #232427;
+  --key-dk: #2B2C2F; --key-dk-ink: #E9E7E2;
+  --knob-a: #F5F4F1; --knob-b: #CECCC7; --knob-c: #E4E3DF; --knurl-a: #8F8D88; --knurl-b: #E2E0DB;
+  --bezel: #1B1C1E;
+  --hole: #19191B;
+  --screw-a: #FFFFFF; --screw-b: #D0CEC9; --screw-c: #9C9A95;
+  --slot: #3A3B3E; --thumb: #ECEBE7;
+}
+.device[data-edition="mint"] {
+  --body: #CFDED6;
+  --cham-hi: #F2FAF6; --cham-mid: #C5D6CD; --cham-lo: #94AA9E;
+  --ink: #1D2925; --ink-2: #3C4F48; --ink-3: #788C85;
+  --hair: #9BB0A7;
+  --engrave: #C2D3CA;
+  --well: #BACDC4;
+  --key-lt: #DCE7E1; --key-lt-ink: #1D2925;
+  --key-dk: #283230; --key-dk-ink: #E2EEE8;
+  --knob-a: #F3F7F5; --knob-b: #C8D3CD; --knob-c: #E1E9E5;
+  --bezel: #17201D;
+  --screw-b: #C9D3CE;
+}
+.device[data-edition="graphite"] {
+  --body: #393B3F;
+  --cham-hi: #73767C; --cham-mid: #3C3E42; --cham-lo: #18191B;
+  --hl: rgba(255,255,255,.16);
+  --sh: rgba(0,0,0,.35);
+  --ink: #ECEAE5; --ink-2: #C4C2BD; --ink-3: #8D8E91;
+  --hair: #67696E;
+  --engrave: #34363A; --engrave-dk: rgba(0,0,0,.65); --engrave-lt: rgba(255,255,255,.14);
+  --well: #2A2C2F;
+  --key-lt: #56595E; --key-lt-ink: #F1EFEA;
+  --key-dk: #1D1E20; --key-dk-ink: #E9E7E2;
+  --knob-a: #6D7076; --knob-b: #3A3C40; --knob-c: #55585D; --knurl-a: #26272A; --knurl-b: #6A6D72;
+  --bezel: #101113;
+  --hole: #0B0B0C;
+  --screw-a: #8A8D92; --screw-b: #4A4C50; --screw-c: #26272A;
+  --slot: #18191B; --thumb: #9A9DA2;
 }
 
 html, body {
@@ -56,7 +97,7 @@ body {
   position: fixed;
   inset: 0;
   font-family: var(--mono);
-  color: var(--ink);
+  color: #232427;
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
   -webkit-user-select: none;
@@ -64,14 +105,14 @@ body {
   -webkit-touch-callout: none;
   -webkit-tap-highlight-color: transparent;
   touch-action: none;
-  /* softly lit warm-grey studio surface with a gentle vignette */
+  /* soft studio light falling from the top-left, gentle vignette */
   background:
-    radial-gradient(120% 70% at 50% 38%, rgba(255,255,255,.35) 0%, rgba(255,255,255,0) 55%),
-    radial-gradient(140% 100% at 50% 45%, var(--page-hi) 0%, #C3BEB6 55%, var(--page-lo) 100%);
+    radial-gradient(110% 70% at 22% 18%, rgba(255,255,255,.38) 0%, rgba(255,255,255,0) 60%),
+    radial-gradient(150% 110% at 40% 35%, var(--page-hi) 0%, #C3BEB6 55%, var(--page-lo) 100%);
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
-/* ---------- stage + device shell ---------------------------------------- */
+/* ---------- stage, shell, face, board ---------------------------------- */
 #stage { position: fixed; inset: 0; overflow: hidden; }
 .device {
   position: absolute;
@@ -81,50 +122,42 @@ body {
   transform: translate3d(0, var(--dy, 0px), 0) scale(var(--s));
   transform-origin: 50% 50%;
   border-radius: 40px;
-  background: var(--body-edge);
-  /* layered, physically plausible shadows: contact, near, far, ambient */
+  /* contact, near, mid, far, ambient — all thrown to the bottom-right */
   box-shadow:
-    0 0.5px 0 rgba(0,0,0,.18),
-    0 1px 2px rgba(40,30,20,.16),
-    0 4px 8px rgba(40,30,20,.12),
-    0 14px 24px rgba(40,30,20,.14),
-    0 32px 56px rgba(40,30,20,.16),
-    0 60px 90px rgba(40,30,20,.12);
+    0.5px 0.8px 0 rgba(0,0,0,.20),
+    1.5px 2.5px 4px rgba(40,28,16,.16),
+    5px 10px 18px rgba(40,28,16,.15),
+    12px 26px 44px rgba(40,28,16,.17),
+    22px 52px 90px rgba(40,28,16,.13);
 }
-/* chamfer: a thin light-catching edge between the side wall and the face */
-.device::before {
-  content: "";
+/* chamfer: the 3 px machined edge catches the light top-left */
+.shell {
   position: absolute; inset: 0;
   border-radius: 40px;
-  background: linear-gradient(180deg, #F7F6F2 0%, #DCD9D3 45%, #C4C1BA 100%);
+  background: linear-gradient(135deg, var(--cham-hi) 0%, var(--cham-mid) 42%, var(--cham-lo) 100%);
 }
 .face {
   position: absolute; inset: 3px;
   border-radius: 37px;
-  background-color: var(--face);
-  background-image: var(--noise);
-  background-size: 128px 128px;
+  background-color: var(--body);
+  background-image:
+    linear-gradient(135deg, rgba(255,255,255,.20) 0%, rgba(255,255,255,0) 46%, rgba(0,0,0,.05) 100%),
+    var(--grain);
+  background-size: 100% 100%, 256px 256px;
+  background-blend-mode: normal, soft-light;
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,.95),
-    inset 0 -1px 0 rgba(0,0,0,.06),
+    inset 1px 1px 0 var(--hl),
+    inset -1px -1px 0 var(--sh),
     inset 0 0 0 0.5px rgba(0,0,0,.05);
-  overflow: hidden;
 }
-/* very soft top-light falloff across the face (lighting, not decoration) */
-.face::after {
-  content: "";
-  position: absolute; inset: 0;
-  border-radius: inherit;
-  background: radial-gradient(130% 60% at 50% 0%, rgba(255,255,255,.35), rgba(255,255,255,0) 70%);
-  pointer-events: none;
-}
-
+.board { position: absolute; inset: 0; }
 .abs { position: absolute; left: calc(var(--x) * 1px); top: calc(var(--y) * 1px); }
 
-/* ---------- silkscreen print ------------------------------------------- */
-.print, .lbl {
+/* ---------- silkscreen ------------------------------------------------- */
+.lbl {
+  position: absolute;
   font-family: var(--mono);
-  font-size: 7px;
+  font-size: var(--l1);
   line-height: 1;
   font-weight: 600;
   letter-spacing: .16em;
@@ -132,20 +165,23 @@ body {
   color: var(--ink-2);
   white-space: nowrap;
 }
-.lbl .n { color: var(--ink-3); margin-right: .55em; font-weight: 500; }
-.lbl--c { transform: translateX(-50%); text-align: center; }
-.print--dim { color: var(--ink-3); }
-.print--o { color: var(--orange); }
-
-/* engraved (debossed) type: dark top edge, light bottom edge */
+.lbl .n { color: var(--ink-3); margin-right: .5em; font-weight: 500; }
+.lbl--s { font-size: var(--l2); font-weight: 500; color: var(--ink-3); }
+.lbl--c { transform: translateX(-50%); }
+.lbl--r { transform: translateX(-100%); }
+.lbl--ink { color: var(--ink); }
+/* debossed type: shadow on the top-left inner wall, light on the bottom-right */
 .engrave {
+  position: absolute;
   font-family: var(--mono);
   font-weight: 800;
-  color: #CDC9C2;
-  text-shadow: 0 -0.75px 0 rgba(0,0,0,.42), 0 1px 0 rgba(255,255,255,1);
-  letter-spacing: .04em;
+  line-height: 1;
+  color: var(--engrave);
+  text-shadow: -0.6px -0.7px 0 var(--engrave-dk), 0.7px 0.9px 0 var(--engrave-lt);
+  white-space: nowrap;
 }
-.glyph { color: var(--ink-3); display: block; }
+.glyph { position: absolute; display: block; color: var(--ink-3); }
+.sg { width: 1em; height: 1em; vertical-align: -0.12em; fill: none; stroke: currentColor; stroke-width: .7; stroke-linejoin: miter; }
 
 /* ---------- screws ------------------------------------------------------ */
 .screw {
@@ -153,61 +189,67 @@ body {
   width: 11px; height: 11px;
   margin: -5.5px 0 0 -5.5px;
   border-radius: 50%;
-  background: radial-gradient(circle at 38% 32%, #FFFFFF 0%, #D2D0CB 42%, #9E9C97 100%);
+  background: radial-gradient(circle at 34% 30%, var(--screw-a) 0%, var(--screw-b) 44%, var(--screw-c) 100%);
   box-shadow:
     0 0 0 1px rgba(0,0,0,.10),
-    0 0 0 1.6px rgba(255,255,255,.55),
-    inset 0 -0.5px 1px rgba(0,0,0,.35);
+    -0.6px -0.6px 0 1.2px rgba(0,0,0,.06),
+    0.8px 0.9px 0 1.4px var(--hl),
+    inset -0.6px -0.8px 1px rgba(0,0,0,.35);
 }
 .screw::after {          /* hex socket */
   content: "";
   position: absolute; left: 50%; top: 50%;
   width: 4.6px; height: 4px;
   margin: -2px 0 0 -2.3px;
-  background: #5E5C58;
+  background: #4E4C48;
   clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%);
-  box-shadow: inset 0 1px 0 rgba(0,0,0,.6);
+  box-shadow: inset 0.6px 0.8px 0 rgba(0,0,0,.7);
   transform: rotate(var(--r, 0deg));
 }
 
 /* ---------- display module --------------------------------------------- */
 .bezel {
   position: absolute;
-  left: 22px; top: 56px;
-  width: 336px; height: 214px;
+  left: 22px; top: 54px;
+  width: 336px; height: 216px;
   border-radius: 16px;
-  background: #1B1C1E;
+  background: var(--bezel);
   box-shadow:
-    0 0 0 1px rgba(0,0,0,.08),
-    0 1px 0 1.5px rgba(255,255,255,.7),
-    inset 0 1px 0 rgba(255,255,255,.08),
-    inset 0 -1px 0 rgba(0,0,0,.6);
+    -0.5px -0.5px 0 0.5px rgba(0,0,0,.12),
+    0.8px 1px 0 1.2px var(--hl),
+    inset 1px 1px 0 rgba(255,255,255,.07),
+    inset -1px -1px 0 rgba(0,0,0,.6);
 }
 .glass {
   position: absolute;
-  left: 8px; top: 8px; right: 8px; bottom: 14px;
-  border-radius: 7px;
+  left: 8px; top: 8px; width: 320px; height: 192px;
+  border-radius: 8px;
   overflow: hidden;
-  background: var(--lcd-bg, #0D0E0F);
-  box-shadow: inset 0 2px 6px rgba(0,0,0,.85), inset 0 0 0 1px rgba(0,0,0,.9);
+  background: var(--lcd-bg, #050506);
+  box-shadow: inset 1.5px 2px 6px rgba(0,0,0,.8), inset 0 0 0 1px rgba(0,0,0,.9);
 }
-.glass canvas {
-  position: absolute;
-  left: 0; top: 4px;
-  width: 320px; height: 184px;
+.glass canvas { position: absolute; left: 0; top: 4px; width: 320px; height: 184px; }
+/* backlight bloom for transmissive themes (amber LCD) */
+.glass::before {
+  content: "";
+  position: absolute; inset: 0;
+  pointer-events: none;
+  background: var(--lcd-light, none);
 }
-/* glass: inner top shadow + a soft angled reflection, both static */
+/* cover glass: a soft specular sweep from the top-left and a lit rim */
 .glass::after {
   content: "";
   position: absolute; inset: 0;
   border-radius: inherit;
   pointer-events: none;
   background:
-    linear-gradient(115deg, rgba(255,255,255,.075) 0%, rgba(255,255,255,.03) 34%, rgba(255,255,255,0) 34.5%, rgba(255,255,255,0) 100%),
-    linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,0) 18%);
-  box-shadow: inset 0 3px 8px rgba(0,0,0,.55);
+    linear-gradient(128deg, rgba(255,255,255,.12) 0%, rgba(255,255,255,.045) 26%, rgba(255,255,255,0) 26.4%, rgba(255,255,255,0) 100%),
+    radial-gradient(70% 55% at 12% 0%, rgba(255,255,255,.07), rgba(255,255,255,0) 70%);
+  box-shadow:
+    inset 1px 1px 0 rgba(255,255,255,.10),
+    inset 2px 3px 8px rgba(0,0,0,.5);
 }
-.bezel .print { position: absolute; color: #6E6F72; font-size: 6px; }
+.bezel .lbl { color: #75767A; font-size: var(--l2); top: 203px; }
 
 /* ---------- LEDs --------------------------------------------------------- */
 .led {
@@ -215,13 +257,13 @@ body {
   width: 6px; height: 6px;
   margin: -3px 0 0 -3px;
   border-radius: 50%;
-  background: radial-gradient(circle at 40% 35%, #8A8985, #5C5B58 70%);
-  box-shadow: 0 0.5px 0 rgba(255,255,255,.9), inset 0 0.5px 1px rgba(0,0,0,.5);
+  background: radial-gradient(circle at 36% 32%, #8E8D89, #5A5956 72%);
+  box-shadow: 0.6px 0.7px 0 var(--hl), inset -0.5px -0.6px 1px rgba(0,0,0,.5);
 }
 .led i {
   position: absolute; inset: 0;
   border-radius: 50%;
-  background: radial-gradient(circle at 40% 35%, #FFFFFF 0%, var(--c) 45%, var(--c) 100%);
+  background: radial-gradient(circle at 36% 32%, #FFFFFF 0%, var(--c) 46%, var(--c) 100%);
   box-shadow: 0 0 4px 1px var(--c), 0 0 12px 2px var(--c);
   opacity: 0;
   transition: opacity 160ms ease-out;
@@ -234,57 +276,53 @@ body {
 @keyframes ledBlink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: .12; } }
 @keyframes ledBreathe { 0%, 100% { opacity: .08; } 50% { opacity: .85; } }
 
-/* ---------- keys --------------------------------------------------------- */
-.key {
-  position: absolute;
-  width: 56px; height: 56px;
-  touch-action: none;
-  cursor: pointer;
-  outline: none;
-}
-.key--wide { width: 196px; }
+/* ---------- rubber keys --------------------------------------------------- */
+.key { position: absolute; width: 46px; height: 46px; touch-action: none; cursor: pointer; outline: none; }
+.key--wide { width: 220px; }
 .key__well {
   position: absolute; inset: -3px;
-  border-radius: 14px;
-  background: #CFCCC6;
+  border-radius: 12px;
+  background: var(--well);
   box-shadow:
-    inset 0 2px 3px rgba(0,0,0,.30),
-    inset 0 0 0 0.5px rgba(0,0,0,.20),
-    0 1px 0 rgba(255,255,255,.9);
+    inset 1.5px 2px 3px rgba(0,0,0,.32),
+    inset 0 0 0 0.5px rgba(0,0,0,.18),
+    0.7px 0.9px 0 var(--hl);
 }
 .key__shadow {
   position: absolute; inset: 1px;
-  border-radius: 11px;
-  box-shadow: 0 3px 3px rgba(0,0,0,.30), 0 1px 1px rgba(0,0,0,.30);
+  border-radius: 9px;
+  box-shadow: 1.4px 2.6px 3px rgba(0,0,0,.30), 0.4px 0.9px 1px rgba(0,0,0,.32);
   will-change: transform, opacity;
 }
 .key__cap {
   position: absolute; inset: 0;
-  border-radius: 11px;
+  border-radius: 9px;
   display: grid; place-items: center;
   will-change: transform;
   background-color: var(--cap);
-  background-image: var(--noise);
-  background-size: 96px 96px;
-  background-blend-mode: multiply;
+  /* matte rubber: fine speckle + a broad soft dome lit from the top-left */
+  background-image:
+    radial-gradient(120% 120% at 28% 22%, rgba(255,255,255,var(--dome, .16)) 0%, rgba(255,255,255,0) 55%, rgba(0,0,0,.07) 100%),
+    var(--rubber);
+  background-size: 100% 100%, 64px 64px;
+  background-blend-mode: normal, soft-light;
   box-shadow:
-    inset 0 1.5px 0 var(--cap-hi),
-    inset 0 -2.5px 0 var(--cap-lo),
+    inset 1px 1.2px 0 var(--cap-hi),
+    inset -1px -2px 0 var(--cap-lo),
     inset 0 0 0 0.5px rgba(0,0,0,.18);
 }
-.key__cap svg { width: 22px; height: 22px; display: block; color: var(--cap-ink); }
-/* status lamp set into the key cap: a dark window that lights when active */
+.key__cap svg { width: 20px; height: 20px; display: block; color: var(--cap-ink); transition: opacity 160ms; }
+/* status lamp set into the cap: a dark window that lights when active */
 .key__cap::before {
   content: "";
-  position: absolute; left: 50%; top: 6px;
+  position: absolute; left: 50%; top: 5px;
   width: 12px; height: 3px; margin-left: -6px;
   border-radius: 1.5px;
-  background: rgba(0,0,0,.16);
-  box-shadow: inset 0 0.6px 0.8px rgba(0,0,0,.35), 0 0.6px 0 rgba(255,255,255,.35);
+  background: var(--lamp-off, rgba(0,0,0,.16));
+  box-shadow: inset 0.6px 0.7px 0.8px rgba(0,0,0,.35), 0.5px 0.6px 0 rgba(255,255,255,.3);
 }
-.key--dark .key__cap::before { display: none; }
 .key__glow {
-  position: absolute; left: 50%; top: 6px;
+  position: absolute; left: 50%; top: 5px;
   width: 12px; height: 3px; margin-left: -6px;
   border-radius: 1.5px;
   background: var(--lamp, var(--orange));
@@ -295,310 +333,343 @@ body {
   pointer-events: none;
 }
 .key.active .key__glow { opacity: 1; }
-.key--grey  { --cap: var(--grey-key); --cap-hi: rgba(255,255,255,.85); --cap-lo: rgba(0,0,0,.14); --cap-ink: var(--ink); }
-.key--dark  { --cap: var(--graphite-key); --cap-hi: rgba(255,255,255,.14); --cap-lo: rgba(0,0,0,.45); --cap-ink: #E7E5E0; }
-.key--orange{ --cap: var(--orange); --cap-hi: rgba(255,214,190,.75); --cap-lo: rgba(120,30,0,.35); --cap-ink: var(--ink); }
-.key--orange { --lamp: #FFF4EA; --lamp-glow: rgba(255,240,225,.75); }
-.key--orange .key__cap::before { background: rgba(110,30,0,.28); }
-.key--orange .key__cap svg { width: 30px; height: 30px; }
+.key.blink .key__glow { animation: ledBlink .9s steps(1, end) infinite; }
+.key.disabled .key__cap svg { opacity: .38; }
+.device.is-hold .key .key__cap svg { opacity: .55; }
+.key--lt { --cap: var(--key-lt); --cap-hi: rgba(255,255,255,.75); --cap-lo: rgba(0,0,0,.14); --cap-ink: var(--key-lt-ink); }
+.key--dk { --cap: var(--key-dk); --cap-hi: rgba(255,255,255,.13); --cap-lo: rgba(0,0,0,.45); --cap-ink: var(--key-dk-ink); --dome: .07; --lamp-off: rgba(255,255,255,.07); }
+.key--or { --cap: var(--orange); --cap-hi: rgba(255,214,190,.72); --cap-lo: rgba(120,30,0,.35); --cap-ink: #232427; --dome: .2;
+           --lamp: #FFF4EA; --lamp-glow: rgba(255,240,225,.75); --lamp-off: rgba(110,30,0,.28); }
+.device[data-edition="graphite"] .key--lt { --cap-hi: rgba(255,255,255,.18); --cap-lo: rgba(0,0,0,.35); --dome: .1; --lamp-off: rgba(0,0,0,.25); }
+.key--dk.nolamp .key__cap::before { display: none; }
+.key--or .key__cap svg { width: 30px; height: 30px; }
 
-/* ---------- encoder ------------------------------------------------------ */
-.enc {
-  position: absolute;
-  left: 72px; top: 398px;          /* 236 x 236 printed field, centre 190,516 */
-  width: 236px; height: 236px;
-  touch-action: none;
-}
-.enc__scale { position: absolute; inset: 0; overflow: visible; }
+/* ---------- encoder ------------------------------------------------------- */
+.enc { position: absolute; left: 72px; top: 390px; width: 236px; height: 236px; touch-action: none; }
+.enc__scale { position: absolute; inset: 0; overflow: visible; color: var(--ink-3); }
 .enc__well {
-  position: absolute;
-  left: 22px; top: 22px; width: 192px; height: 192px;
+  position: absolute; left: 22px; top: 22px; width: 192px; height: 192px;
   border-radius: 50%;
-  background: #C9C6BF;
-  box-shadow: inset 0 3px 5px rgba(0,0,0,.35), 0 1px 0 rgba(255,255,255,.9);
+  background: var(--well);
+  box-shadow: inset 2px 3px 5px rgba(0,0,0,.36), 0.8px 1px 0 var(--hl);
 }
 .enc__shadow {
-  position: absolute;
-  left: 26px; top: 26px; width: 184px; height: 184px;
+  position: absolute; left: 26px; top: 26px; width: 184px; height: 184px;
   border-radius: 50%;
-  box-shadow: 0 6px 10px rgba(0,0,0,.30), 0 2px 3px rgba(0,0,0,.30);
+  box-shadow: 3px 6px 10px rgba(0,0,0,.30), 1px 2px 3px rgba(0,0,0,.30);
   will-change: transform, opacity;
 }
-.enc__body {
-  position: absolute;
-  left: 26px; top: 26px; width: 184px; height: 184px;
-  border-radius: 50%;
-  will-change: transform;
-}
+.enc__body { position: absolute; left: 26px; top: 26px; width: 184px; height: 184px; border-radius: 50%; will-change: transform; }
 .enc__knurl {
   position: absolute; inset: 0;
   border-radius: 50%;
-  background: repeating-conic-gradient(from 0deg, #8F8D88 0deg 1.5deg, #E2E0DB 1.5deg 3deg);
+  background: repeating-conic-gradient(from 0deg, var(--knurl-a) 0deg 1.5deg, var(--knurl-b) 1.5deg 3deg);
   will-change: transform;
+}
+/* knurl shading is fixed to the light, not to the knob */
+.enc__knurl-light {
+  position: absolute; inset: 0;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(255,255,255,.28), rgba(255,255,255,0) 45%, rgba(0,0,0,.22));
+  pointer-events: none;
 }
 .enc__face {
   position: absolute; inset: 7px;
   border-radius: 50%;
-  /* lathe-turned face: fine concentric grooves + fixed anisotropic highlight */
+  /* lathe-turned face: concentric grooves + anisotropic streaks along the light axis */
   background:
     repeating-radial-gradient(circle at 50% 50%, rgba(0,0,0,.035) 0 0.6px, rgba(255,255,255,.05) 0.6px 1.3px),
-    conic-gradient(from 20deg, #D9D7D2, #F6F5F2 12%, #CFCDC8 25%, #E9E8E4 38%, #C8C6C1 50%, #F4F3F0 62%, #CDCBC6 75%, #ECEBE7 88%, #D9D7D2);
-  box-shadow:
-    inset 0 1px 0 rgba(255,255,255,.9),
-    inset 0 -1px 1px rgba(0,0,0,.18),
-    0 0 0 1px rgba(0,0,0,.18);
+    conic-gradient(from 0deg, var(--knob-c), var(--knob-b) 12%, var(--knob-c) 25%, var(--knob-a) 37.5%, var(--knob-c) 50%, var(--knob-b) 62%, var(--knob-c) 75%, var(--knob-a) 87.5%, var(--knob-c));
+  box-shadow: inset 1px 1px 0 rgba(255,255,255,.85), inset -1px -1px 1px rgba(0,0,0,.2), 0 0 0 1px rgba(0,0,0,.18);
 }
 .enc__cap {
-  position: absolute;
-  left: 50%; top: 50%; width: 62px; height: 62px;
-  margin: -31px 0 0 -31px;
+  position: absolute; left: 50%; top: 50%; width: 62px; height: 62px; margin: -31px 0 0 -31px;
   border-radius: 50%;
   background:
     repeating-radial-gradient(circle at 50% 50%, rgba(0,0,0,.03) 0 0.6px, rgba(255,255,255,.04) 0.6px 1.3px),
-    conic-gradient(from 200deg, #D3D1CC, #F2F1EE 15%, #CBC9C4 30%, #EAE9E5 50%, #C6C4BF 65%, #F0EFEC 82%, #D3D1CC);
-  box-shadow:
-    0 0 0 1px rgba(0,0,0,.10),
-    inset 0 2px 3px rgba(0,0,0,.18),
-    inset 0 -1px 0 rgba(255,255,255,.8);
+    conic-gradient(from 0deg, var(--knob-c), var(--knob-b) 12%, var(--knob-c) 25%, var(--knob-a) 37.5%, var(--knob-c) 50%, var(--knob-b) 62%, var(--knob-c) 75%, var(--knob-a) 87.5%, var(--knob-c));
+  box-shadow: 0 0 0 1px rgba(0,0,0,.10), inset 1.5px 2px 3px rgba(0,0,0,.2), inset -1px -1px 0 rgba(255,255,255,.75);
 }
-.enc__dot, .enc__dimple {
-  position: absolute; left: 50%; top: 50%;
+/* specular hot-spot: stays put while the knob turns */
+.enc__spec {
+  position: absolute; left: 26px; top: 26px; width: 184px; height: 184px;
   border-radius: 50%;
+  pointer-events: none;
+  background:
+    radial-gradient(38% 30% at 30% 24%, rgba(255,255,255,.55) 0%, rgba(255,255,255,0) 100%),
+    radial-gradient(60% 60% at 74% 80%, rgba(0,0,0,.10) 0%, rgba(0,0,0,0) 100%);
   will-change: transform;
 }
+.enc__dot, .enc__dimple { position: absolute; left: 50%; top: 50%; border-radius: 50%; will-change: transform; }
 .enc__dot {
   width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px;
   background: var(--orange);
-  box-shadow: inset 0 1px 1px rgba(255,255,255,.45), inset 0 -1px 1px rgba(0,0,0,.25), 0 0 0 0.5px rgba(0,0,0,.2);
+  box-shadow: inset 0.8px 1px 1px rgba(255,255,255,.45), inset -0.8px -1px 1px rgba(0,0,0,.25), 0 0 0 0.5px rgba(0,0,0,.2);
 }
 .enc__dimple {
   width: 24px; height: 24px; margin: -12px 0 0 -12px;
-  background: radial-gradient(circle at 50% 70%, #E4E2DD 0%, #D2D0CB 55%, #BFBDB8 100%);
-  box-shadow: inset 0 2.5px 3px rgba(0,0,0,.30), inset 0 -1px 1px rgba(255,255,255,.75), 0 0.6px 0 rgba(255,255,255,.8), 0 -0.5px 0 rgba(0,0,0,.08);
+  background: radial-gradient(circle at 60% 66%, var(--knob-a) 0%, var(--knob-c) 55%, var(--knob-b) 100%);
+  box-shadow: inset 1.5px 2.2px 3px rgba(0,0,0,.30), inset -1px -1px 1px rgba(255,255,255,.7), 0.5px 0.6px 0 rgba(255,255,255,.75);
 }
 .enc__hit { position: absolute; left: 18px; top: 18px; width: 200px; height: 200px; border-radius: 50%; }
 
-/* ---------- speaker grilles --------------------------------------------- */
+/* ---------- speaker grilles ---------------------------------------------- */
 .spk {
-  position: absolute;
-  width: 30px; height: 126px;
+  position: absolute; width: 30px; height: 130px;
   background-image:
-    radial-gradient(circle at 50% 50%, #18191B 0 1.55px, rgba(0,0,0,.22) 1.65px 2.05px, rgba(0,0,0,0) 2.2px),
-    radial-gradient(circle at 50% 50%, rgba(255,255,255,.9) 0 2.05px, rgba(255,255,255,0) 2.3px);
-  background-size: 7.5px 7px, 7.5px 7px;
-  background-position: 0 0, 0 0.7px;
+    radial-gradient(circle at 50% 50%, var(--hole) 0 1.55px, rgba(0,0,0,.22) 1.65px 2.05px, rgba(0,0,0,0) 2.2px),
+    radial-gradient(circle at 50% 50%, var(--hl) 0 2.05px, rgba(255,255,255,0) 2.3px);
+  background-size: 7.5px 7.22px, 7.5px 7.22px;
+  background-position: 0 0, 0.6px 0.7px;
 }
 
-/* ---------- slide switches ---------------------------------------------- */
+/* ---------- slide switches ------------------------------------------------- */
 .sw { position: absolute; width: 40px; height: 14px; touch-action: none; cursor: pointer; }
+.sw::before { content: ""; position: absolute; left: -6px; right: -6px; top: -15px; bottom: -15px; }   /* 52×44 target */
 .sw__slot {
   position: absolute; inset: 0;
   border-radius: 7px;
-  background: #3A3B3E;
-  box-shadow: inset 0 1.5px 2px rgba(0,0,0,.7), 0 1px 0 rgba(255,255,255,.95), 0 0 0 0.5px rgba(0,0,0,.2);
+  background: var(--slot);
+  box-shadow: inset 1px 1.5px 2px rgba(0,0,0,.7), 0.7px 0.9px 0 var(--hl), 0 0 0 0.5px rgba(0,0,0,.2);
   overflow: hidden;
 }
-.sw__flag {             /* orange "locked" flag revealed by the HOLD slider */
-  position: absolute; left: 3px; top: 3px; bottom: 3px; width: 14px;
-  border-radius: 3px;
-  background: var(--orange);
-  opacity: 0;
-}
+.sw__flag { position: absolute; left: 3px; top: 3px; bottom: 3px; width: 14px; border-radius: 3px; background: var(--orange); opacity: 0; }
 .sw__thumb {
   position: absolute; left: 1.5px; top: 1.5px;
   width: 20px; height: 11px;
   border-radius: 5.5px;
-  background-color: #E9E8E4;
+  background-color: var(--thumb);
   background-image: repeating-linear-gradient(90deg, rgba(0,0,0,0) 0 2.5px, rgba(0,0,0,.16) 2.5px 3.2px);
-  background-size: 10px 6px;
-  background-position: center;
-  background-repeat: no-repeat;
-  box-shadow: inset 0 1px 0 #FFFFFF, inset 0 -1px 0 rgba(0,0,0,.18), 0 1px 1.5px rgba(0,0,0,.45);
+  background-size: 10px 6px; background-position: center; background-repeat: no-repeat;
+  box-shadow: inset 0.8px 1px 0 rgba(255,255,255,.9), inset -0.8px -1px 0 rgba(0,0,0,.18), 0.8px 1.2px 1.5px rgba(0,0,0,.45);
   will-change: transform;
 }
 
-/* ---------- bottom rail ------------------------------------------------- */
+/* ---------- bottom rail -------------------------------------------------- */
 .mic {
   position: absolute; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 50%;
-  background: #1A1B1D; box-shadow: 0 0.6px 0 rgba(255,255,255,.95);
+  background: var(--hole); box-shadow: 0.5px 0.6px 0 var(--hl);
 }
-.reg { position: absolute; color: var(--ink-3); }
-.reg svg { display: block; }
+.art { position: absolute; inset: 0; pointer-events: none; overflow: visible; color: var(--hair); }
 
-/* overlay art (connector lines, group brackets) */
-.art { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+/* ---------- landscape: the device only works upright --------------------- */
+#rotate {
+  position: fixed; inset: 0;
+  display: none;
+  align-items: center; justify-content: center; flex-direction: column; gap: 14px;
+}
+#rotate canvas { width: 240px; height: 88px; border-radius: 10px; box-shadow: inset 0 0 0 1px #000, 2px 4px 12px rgba(40,28,16,.25); background: #050506; }
+#rotate .lbl { position: static; color: #4A4B4F; }
+@media (orientation: landscape) and (max-height: 520px) {
+  #rotate { display: flex; }
+  .device { visibility: hidden; }
+}
 
-/* hidden helpers (file input, haptic switch) */
+/* hidden helpers: file inputs, haptic switch, screen-reader mirror */
 .offscreen { position: fixed; left: -200px; top: 0; width: 1px; height: 1px; opacity: 0.01; pointer-events: none; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.enc__a11y { position: absolute; left: 90px; top: 408px; width: 200px; height: 200px; opacity: 0; pointer-events: none; margin: 0; }
 
 @media (prefers-reduced-motion: reduce) {
-  .led.blink i, .led.breathe i { animation: none; opacity: .8; }
+  .led.blink i, .led.breathe i, .key.blink .key__glow { animation: none; opacity: .8; }
+  .led i, .key__glow { transition: none; }
 }
 </style>
 </head>
 <body>
 <div id="stage">
-  <div class="device" id="device" aria-label="MP-1 portable audio player">
-    <div class="face" id="face">
+  <div class="device" id="device" data-edition="orange">
+    <div class="shell"></div>
+    <div class="face"></div>
+    <div class="board" id="board">
 
-      <!-- screws -->
+      <!-- screws: mirror-symmetric, each turned a little differently -->
       <span class="screw" style="left:20px;top:20px;--r:14deg"></span>
-      <span class="screw" style="left:356px;top:20px;--r:-33deg"></span>
-      <span class="screw" style="left:20px;top:734px;--r:41deg"></span>
-      <span class="screw" style="left:356px;top:734px;--r:-8deg"></span>
+      <span class="screw" style="left:360px;top:20px;--r:-33deg"></span>
+      <span class="screw" style="left:20px;top:740px;--r:41deg"></span>
+      <span class="screw" style="left:360px;top:740px;--r:-8deg"></span>
 
-      <!-- top rail: sound switch / model / hold (mirror-symmetric) -->
-      <div class="sw abs" id="swSnd" role="switch" aria-label="UI sounds" aria-checked="true" style="--x:40;--y:22">
+      <!-- top rail: SND / engraved model / HOLD (mirrored about x = 190) -->
+      <div class="sw abs" id="swSnd" role="switch" aria-label="UI sounds" aria-checked="true" tabindex="0" style="--x:38;--y:21">
         <div class="sw__slot"></div><div class="sw__thumb"></div>
       </div>
-      <span class="lbl abs" style="--x:86;--y:25.5">snd</span>
-      <svg class="abs glyph" style="--x:41;--y:39" width="10" height="7" viewBox="0 0 10 7" aria-hidden="true"><path d="M.8 2.3h1.7L4.6.6v5.8L2.5 4.7H.8z" fill="currentColor"/><path d="M6.4 2.1l2.6 2.8M9 2.1L6.4 4.9" stroke="currentColor" stroke-width="1"/></svg>
-      <svg class="abs glyph" style="--x:70;--y:39" width="10" height="7" viewBox="0 0 10 7" aria-hidden="true"><path d="M.8 2.3h1.7L4.6.6v5.8L2.5 4.7H.8z" fill="currentColor"/><path d="M6.2 2.2a1.7 1.7 0 0 1 0 2.6M7.6 1a3.4 3.4 0 0 1 0 5" fill="none" stroke="currentColor" stroke-width="1"/></svg>
+      <span class="lbl" style="left:84px;top:24.5px">snd</span>
+      <svg class="glyph" style="left:38px;top:39px" width="10" height="7" viewBox="0 0 10 7" aria-hidden="true"><path d="M.8 2.3h1.7L4.6.6v5.8L2.5 4.7H.8z" fill="currentColor"/><path d="M6.4 2.1l2.6 2.8M9 2.1L6.4 4.9" stroke="currentColor" stroke-width="1"/></svg>
+      <svg class="glyph" style="left:68px;top:39px" width="10" height="7" viewBox="0 0 10 7" aria-hidden="true"><path d="M.8 2.3h1.7L4.6.6v5.8L2.5 4.7H.8z" fill="currentColor"/><path d="M6.2 2.2a1.7 1.7 0 0 1 0 2.6M7.6 1a3.4 3.4 0 0 1 0 5" fill="none" stroke="currentColor" stroke-width="1"/></svg>
 
-      <div class="abs engrave" style="--x:190;--y:15;font-size:16px;transform:translateX(-50%)">MP-1</div>
-      <span class="lbl abs lbl--c print--dim" style="--x:190;--y:36;font-size:5.5px">portable audio player · 001</span>
+      <div class="engrave" style="left:190px;top:13px;font-size:16px;letter-spacing:.04em;transform:translateX(-50%)">MP-1</div>
+      <span class="lbl lbl--s lbl--c" style="left:190px;top:34px">portable audio player</span>
 
-      <div class="sw abs" id="swHold" role="switch" aria-label="Hold" aria-checked="false" style="--x:300;--y:22">
+      <div class="sw abs" id="swHold" role="switch" aria-label="Hold: lock all controls" aria-checked="false" tabindex="0" style="--x:302;--y:21">
         <div class="sw__slot"><div class="sw__flag"></div></div><div class="sw__thumb"></div>
       </div>
-      <span class="lbl abs" style="--x:294;--y:25.5;transform:translateX(-100%)">hold</span>
-      <svg class="abs glyph" style="--x:302;--y:38" width="8" height="9" viewBox="0 0 8 9" aria-hidden="true"><rect x=".6" y="3.8" width="6.8" height="4.8" rx=".8" fill="currentColor"/><path d="M2.1 4V2.6a1.8 1.8 0 0 1 3.5-.6" fill="none" stroke="currentColor" stroke-width="1"/></svg>
-      <svg class="abs glyph" style="--x:331;--y:38" width="8" height="9" viewBox="0 0 8 9" aria-hidden="true"><rect x=".6" y="3.8" width="6.8" height="4.8" rx=".8" fill="currentColor"/><path d="M2.1 4V2.6a1.9 1.9 0 0 1 3.8 0V4" fill="none" stroke="currentColor" stroke-width="1"/></svg>
+      <span class="lbl lbl--r" style="left:296px;top:24.5px">hold</span>
+      <svg class="glyph" style="left:302px;top:37px" width="8" height="9" viewBox="0 0 8 9" aria-hidden="true"><rect x=".6" y="3.8" width="6.8" height="4.8" rx=".8" fill="currentColor"/><path d="M2.1 4V2.6a1.8 1.8 0 0 1 3.5-.6" fill="none" stroke="currentColor" stroke-width="1"/></svg>
+      <svg class="glyph" style="left:334px;top:37px" width="8" height="9" viewBox="0 0 8 9" aria-hidden="true"><rect x=".6" y="3.8" width="6.8" height="4.8" rx=".8" fill="currentColor"/><path d="M2.1 4V2.6a1.9 1.9 0 0 1 3.8 0V4" fill="none" stroke="currentColor" stroke-width="1"/></svg>
 
       <!-- display -->
       <div class="bezel" id="bezel">
-        <div class="glass" id="glass"><canvas id="lcd" width="960" height="552"></canvas></div>
-        <span class="print" style="left:10px;bottom:4px">160×92 dot matrix</span>
-        <span class="print" style="right:10px;bottom:4px">01</span>
+        <div class="glass" id="glass"><canvas id="lcd" width="960" height="552" role="img" aria-label="Display"></canvas></div>
+        <span class="lbl" style="left:10px">160×92 dot matrix</span>
+        <span class="lbl lbl--r" id="lcdType" style="left:326px">oled</span>
       </div>
 
-      <!-- status LEDs, on the 5-column grid -->
-      <span class="led" id="ledPwr"  style="left:50px;top:289px;--c:var(--led-green)"><i></i></span>
-      <span class="led" id="ledPlay" style="left:120px;top:289px;--c:var(--led-green)"><i></i></span>
-      <span class="led" id="ledAir"  style="left:190px;top:289px;--c:var(--led-blue)"><i></i></span>
-      <span class="led" id="ledShuf" style="left:260px;top:289px;--c:var(--orange)"><i></i></span>
-      <span class="led" id="ledRpt"  style="left:330px;top:289px;--c:var(--orange)"><i></i></span>
-      <span class="lbl abs lbl--c print--dim" style="--x:50;--y:298">pwr</span>
-      <span class="lbl abs lbl--c print--dim" style="--x:120;--y:298">play</span>
-      <span class="lbl abs lbl--c print--dim" style="--x:190;--y:298">wireless</span>
-      <span class="lbl abs lbl--c print--dim" style="--x:260;--y:298">shuffle</span>
-      <span class="lbl abs lbl--c print--dim" style="--x:330;--y:298" id="lblRpt">repeat</span>
+      <!-- status LEDs: one per grid column -->
+      <span class="led" id="ledPwr"   style="left:45px;top:286px;--c:var(--led-green)"><i></i></span>
+      <span class="led" id="ledPlay"  style="left:103px;top:286px;--c:var(--led-green)"><i></i></span>
+      <span class="led" id="ledSleep" style="left:161px;top:286px;--c:var(--orange)"><i></i></span>
+      <span class="led" id="ledAir"   style="left:219px;top:286px;--c:var(--led-blue)"><i></i></span>
+      <span class="led" id="ledShuf"  style="left:277px;top:286px;--c:var(--orange)"><i></i></span>
+      <span class="led" id="ledRpt"   style="left:335px;top:286px;--c:var(--orange)"><i></i></span>
+      <span class="lbl lbl--s lbl--c" style="left:45px;top:293px">pwr</span>
+      <span class="lbl lbl--s lbl--c" style="left:103px;top:293px">play</span>
+      <span class="lbl lbl--s lbl--c" style="left:161px;top:293px">sleep</span>
+      <span class="lbl lbl--s lbl--c" style="left:219px;top:293px">wireless</span>
+      <span class="lbl lbl--s lbl--c" style="left:277px;top:293px">shuffle</span>
+      <span class="lbl lbl--s lbl--c" style="left:335px;top:293px">repeat</span>
 
-      <!-- function keys 01–05 -->
-      <span class="lbl abs" style="--x:22;--y:316"><span class="n">01</span>menu</span>
-      <span class="lbl abs" style="--x:92;--y:316"><span class="n">02</span>add</span>
-      <span class="lbl abs" style="--x:162;--y:316"><span class="n">03</span>air</span>
-      <span class="lbl abs" style="--x:232;--y:316"><span class="n">04</span>shuf</span>
-      <span class="lbl abs" style="--x:302;--y:316"><span class="n">05</span>rpt</span>
+      <!-- function keys 01–06 -->
+      <span class="lbl" style="left:22px;top:309px"><span class="n">01</span><span class="lbl--ink">shift</span></span>
+      <span class="lbl" style="left:80px;top:309px"><span class="n">02</span>menu</span>
+      <span class="lbl" style="left:138px;top:309px"><span class="n">03</span>add</span>
+      <span class="lbl" style="left:196px;top:309px"><span class="n">04</span>air</span>
+      <span class="lbl" style="left:254px;top:309px"><span class="n">05</span>shuf</span>
+      <span class="lbl" style="left:312px;top:309px"><span class="n">06</span>rpt</span>
 
-      <div class="key key--grey abs" data-key="menu" role="button" aria-label="Menu / back" style="--x:22;--y:328">
+      <div class="key key--dk abs" data-key="shift" role="button" aria-label="Shift" aria-pressed="false" tabindex="0" style="--x:22;--y:320">
+        <span class="key__well"></span><span class="key__shadow"></span>
+        <span class="key__cap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="miter"><path d="M12 4.5 4.8 12h4.1v6.5h6.2V12h4.1z"/></svg><span class="key__glow"></span></span>
+      </div>
+      <div class="key key--lt abs" data-key="menu" role="button" aria-label="Menu, back" tabindex="0" style="--x:80;--y:320">
         <span class="key__well"></span><span class="key__shadow"></span>
         <span class="key__cap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"><path d="M5 7h14M5 12h14M5 17h8"/></svg><span class="key__glow"></span></span>
       </div>
-      <div class="key key--grey abs" data-key="add" role="button" aria-label="Add songs" style="--x:92;--y:328">
+      <div class="key key--lt abs" data-key="add" role="button" aria-label="Add songs" tabindex="0" style="--x:138;--y:320">
         <span class="key__well"></span><span class="key__shadow"></span>
         <span class="key__cap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"><path d="M12 5v14M5 12h14"/></svg><span class="key__glow"></span></span>
       </div>
-      <div class="key key--grey abs" data-key="air" role="button" aria-label="Wireless output" style="--x:162;--y:328">
+      <div class="key key--lt abs" data-key="air" role="button" aria-label="Wireless output" tabindex="0" style="--x:196;--y:320">
         <span class="key__well"></span><span class="key__shadow"></span>
-        <span class="key__cap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"><path d="M5.6 13.4a9 9 0 0 1 12.8 0M8.5 16.2a5 5 0 0 1 7 0"/><rect x="10.8" y="18.4" width="2.4" height="2.4" fill="currentColor" stroke="none"/><path d="M12 3.5v4" /></svg><span class="key__glow"></span></span>
+        <span class="key__cap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"><path d="M5.6 13.4a9 9 0 0 1 12.8 0M8.5 16.2a5 5 0 0 1 7 0"/><rect x="10.8" y="18.4" width="2.4" height="2.4" fill="currentColor" stroke="none"/><path d="M12 3.5v4"/></svg><span class="key__glow"></span></span>
       </div>
-      <div class="key key--grey abs" data-key="shuf" role="button" aria-label="Shuffle" style="--x:232;--y:328">
+      <div class="key key--lt abs" data-key="shuf" role="button" aria-label="Shuffle" aria-pressed="false" tabindex="0" style="--x:254;--y:320">
         <span class="key__well"></span><span class="key__shadow"></span>
         <span class="key__cap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"><path d="M4 7h3.5l9 10H20M4 17h3.5l2.4-2.7M14.1 9.7 16.5 7H20M17.5 4.5 20 7l-2.5 2.5M17.5 14.5 20 17l-2.5 2.5"/></svg><span class="key__glow"></span></span>
       </div>
-      <div class="key key--grey abs" data-key="rpt" role="button" aria-label="Repeat" style="--x:302;--y:328">
+      <div class="key key--lt abs" data-key="rpt" role="button" aria-label="Repeat" tabindex="0" style="--x:312;--y:320">
         <span class="key__well"></span><span class="key__shadow"></span>
         <span class="key__cap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"><path d="M5 11.5V8h13M15.5 5.5 18 8l-2.5 2.5M19 12.5V16H6M8.5 18.5 6 16l2.5-2.5"/></svg><span class="key__glow"></span></span>
       </div>
+      <!-- shift layer, printed under each key and tied together by a bus line -->
+      <span class="lbl lbl--s lbl--c" style="left:45px;top:372px">2× lock</span>
+      <span class="lbl lbl--s lbl--c" style="left:103px;top:372px">setup</span>
+      <span class="lbl lbl--s lbl--c" style="left:161px;top:372px">fav</span>
+      <span class="lbl lbl--s lbl--c" style="left:219px;top:372px">sleep</span>
+      <span class="lbl lbl--s lbl--c" style="left:277px;top:372px">vis</span>
+      <span class="lbl lbl--s lbl--c" style="left:335px;top:372px">fx</span>
 
       <!-- speaker grilles flanking the encoder -->
-      <div class="spk" style="left:22px;top:453px"></div>
-      <div class="spk" style="left:328px;top:453px"></div>
-      <span class="lbl abs lbl--c print--dim" style="--x:37;--y:586">l</span>
-      <span class="lbl abs lbl--c print--dim" style="--x:343;--y:586">r</span>
+      <div class="spk" style="left:22px;top:458px"></div>
+      <div class="spk" style="left:328px;top:458px"></div>
+      <span class="lbl lbl--s lbl--c" style="left:37px;top:594px">l</span>
+      <span class="lbl lbl--s lbl--c" style="left:343px;top:594px">r</span>
 
-      <!-- encoder 09 -->
+      <!-- encoder 10 -->
       <div class="enc" id="enc">
         <svg class="enc__scale" id="encScale" viewBox="0 0 236 236" aria-hidden="true"></svg>
         <div class="enc__well"></div>
         <div class="enc__shadow" id="encShadow"></div>
         <div class="enc__body" id="encBody">
           <div class="enc__knurl" id="encKnurl"></div>
+          <div class="enc__knurl-light"></div>
           <div class="enc__face"></div>
           <div class="enc__dimple" id="encDimple"></div>
           <div class="enc__dot" id="encDot"></div>
           <div class="enc__cap" id="encCap"></div>
         </div>
-        <div class="enc__hit" id="encHit" role="slider" aria-label="Encoder"></div>
+        <div class="enc__spec" id="encSpec"></div>
+        <div class="enc__hit" id="encHit" aria-hidden="true"></div>
       </div>
-      <span class="led" id="ledVol"  style="left:24px;top:418px;--c:var(--orange)"><i></i></span>
-      <span class="led" id="ledSeek" style="left:24px;top:430px;--c:var(--orange)"><i></i></span>
-      <span class="led" id="ledScrl" style="left:24px;top:442px;--c:var(--orange)"><i></i></span>
-      <span class="lbl abs print--dim" style="--x:32;--y:415">vol</span>
-      <span class="lbl abs print--dim" style="--x:32;--y:427">seek</span>
-      <span class="lbl abs print--dim" style="--x:32;--y:439">scrl</span>
-      <span class="lbl abs print--dim" style="--x:62;--y:415;font-weight:500">%</span>
-      <span class="lbl abs print--dim" style="--x:62;--y:427;font-weight:500">sec</span>
-      <span class="lbl abs print--dim" style="--x:62;--y:439;font-weight:500">trk</span>
-      <span class="lbl abs" style="--x:302;--y:415"><span class="n">09</span>enc</span>
-      <span class="lbl abs print--dim" style="--x:302;--y:427">push ok</span>
-      <span class="lbl abs print--dim" style="--x:302;--y:439">hold mode</span>
+      <input type="range" id="encA11y" class="enc__a11y" min="0" max="100" step="1" value="50" aria-label="Encoder">
+      <button type="button" id="encPushA11y" class="sr-only">Encoder push, OK</button>
+      <span class="led" id="ledVol"  style="left:26px;top:403px;--c:var(--orange)"><i></i></span>
+      <span class="led" id="ledSeek" style="left:26px;top:415px;--c:var(--orange)"><i></i></span>
+      <span class="led" id="ledScrl" style="left:26px;top:427px;--c:var(--orange)"><i></i></span>
+      <span class="led" id="ledSpd"  style="left:26px;top:439px;--c:var(--orange)"><i></i></span>
+      <span class="lbl" style="left:34px;top:400px">vol</span>
+      <span class="lbl" style="left:34px;top:412px">seek</span>
+      <span class="lbl" style="left:34px;top:424px">scrl</span>
+      <span class="lbl" style="left:34px;top:436px">spd</span>
+      <span class="lbl lbl--s" style="left:64px;top:400.5px">%</span>
+      <span class="lbl lbl--s" style="left:64px;top:412.5px">s</span>
+      <span class="lbl lbl--s" style="left:64px;top:424.5px">#</span>
+      <span class="lbl lbl--s" style="left:64px;top:436.5px">×</span>
+      <span class="lbl lbl--r" style="left:358px;top:400px"><span class="n">10</span><span class="lbl--ink">enc</span></span>
+      <span class="lbl lbl--s lbl--r" style="left:358px;top:412.5px">push · ok</span>
+      <span class="lbl lbl--s lbl--r" style="left:358px;top:424.5px">hold · mode</span>
+      <span class="lbl lbl--s lbl--r" style="left:358px;top:436.5px"><svg class="sg" viewBox="0 0 6 6" aria-hidden="true"><path d="M3 .6.7 3h1.5v2.4h1.6V3h1.5z"/></svg> spd · find</span>
 
-      <!-- transport 06–08 -->
-      <span class="lbl abs" style="--x:22;--y:654"><span class="n">06</span>prev</span>
-      <span class="lbl abs" style="--x:92;--y:654"><span class="n">07</span>play / pause</span>
-      <span class="lbl abs" style="--x:302;--y:654"><span class="n">08</span>next</span>
-
-      <div class="key key--dark abs" data-key="prev" role="button" aria-label="Previous" style="--x:22;--y:666">
+      <!-- transport 07–09 -->
+      <span class="lbl" style="left:22px;top:632px"><span class="n">07</span>prev</span>
+      <span class="lbl" style="left:80px;top:632px"><span class="n">08</span>play / pause</span>
+      <span class="lbl" style="left:312px;top:632px"><span class="n">09</span>next</span>
+      <div class="key key--dk nolamp abs" data-key="prev" role="button" aria-label="Previous" tabindex="0" style="--x:22;--y:643">
         <span class="key__well"></span><span class="key__shadow"></span>
         <span class="key__cap"><svg viewBox="0 0 24 24"><path d="M6 6h2.4v12H6z" fill="currentColor"/><path d="M19 6v12l-9-6z" fill="currentColor"/></svg><span class="key__glow"></span></span>
       </div>
-      <div class="key key--orange key--wide abs" data-key="play" role="button" aria-label="Play / pause" style="--x:92;--y:666">
+      <div class="key key--or key--wide abs" data-key="play" role="button" aria-label="Play or pause" tabindex="0" style="--x:80;--y:643">
         <span class="key__well"></span><span class="key__shadow"></span>
         <span class="key__cap"><svg viewBox="0 0 30 24"><path d="M5 5v14l11-7z" fill="currentColor"/><path d="M20 5h2.6v14H20zM25 5h2.6v14H25z" fill="currentColor"/></svg><span class="key__glow"></span></span>
       </div>
-      <div class="key key--dark abs" data-key="next" role="button" aria-label="Next" style="--x:302;--y:666">
+      <div class="key key--dk nolamp abs" data-key="next" role="button" aria-label="Next" tabindex="0" style="--x:312;--y:643">
         <span class="key__well"></span><span class="key__shadow"></span>
         <span class="key__cap"><svg viewBox="0 0 24 24"><path d="M15.6 6H18v12h-2.4z" fill="currentColor"/><path d="M5 6v12l9-6z" fill="currentColor"/></svg><span class="key__glow"></span></span>
       </div>
+      <span class="lbl lbl--s lbl--c" style="left:45px;top:695px">recent</span>
+      <span class="lbl lbl--s lbl--c" style="left:190px;top:695px">stop</span>
+      <span class="lbl lbl--s lbl--c" style="left:335px;top:695px">queue</span>
 
-      <!-- bottom rail: serial, mic, regulatory marks -->
-      <span class="mic" style="left:190px;top:731px"></span>
-      <span class="lbl abs lbl--c print--dim" style="--x:190;--y:738;font-size:5px">mic</span>
-      <span class="lbl abs print--dim" style="--x:40;--y:731;font-size:5.5px;letter-spacing:.12em">s/n mp1-001-0426</span>
-      <span class="lbl abs print--dim" style="--x:40;--y:740;font-size:5.5px;letter-spacing:.12em">5v ⎓ 1a · li-ion 3.7v</span>
-      <div class="reg" style="left:270px;top:728px">
-        <svg width="62" height="18" viewBox="0 0 62 18" fill="none" stroke="#8B8A86" stroke-width="0.9" aria-hidden="true">
-          <!-- WEEE: crossed-out wheelie bin -->
-          <path d="M3 4.5h8M4 4.5l.8 9.5h4.4l.8-9.5M6 3h2"/><circle cx="5.2" cy="15.3" r=".9"/><path d="M1.5 2.5l11 13M12.5 2.5l-11 13"/>
-          <!-- class II: double square -->
-          <rect x="18.5" y="3" width="11" height="11"/><rect x="21" y="5.5" width="6" height="6"/>
-          <!-- DC polarity -->
-          <circle cx="40" cy="8.5" r="2.2"/><circle cx="40" cy="8.5" r="0.7" fill="#8B8A86"/><path d="M42.4 8.5h2.6M33.5 8.5h4.2"/>
-          <!-- recyclable Li-ion -->
-          <path d="M50 12.8l3.2-7.6 3.2 7.6zM53.2 8.2v2.6"/><path d="M58.6 3.5v11"/>
-        </svg>
-      </div>
+      <!-- bottom rail: engraved serial, mic, regulatory marks -->
+      <div class="engrave" style="left:38px;top:727px;font-size:7px;letter-spacing:.14em">S/N MP1·0426·0001</div>
+      <span class="mic" style="left:178px;top:731px"></span>
+      <span class="lbl lbl--s" style="left:184px;top:728px">mic</span>
+      <svg class="glyph" style="left:280px;top:722px" width="62" height="18" viewBox="0 0 62 18" fill="none" stroke="currentColor" stroke-width="0.9" aria-hidden="true">
+        <path d="M3 4.5h8M4 4.5l.8 9.5h4.4l.8-9.5M6 3h2"/><circle cx="5.2" cy="15.3" r=".9"/><path d="M1.5 2.5l11 13M12.5 2.5l-11 13"/>
+        <rect x="18.5" y="3" width="11" height="11"/><rect x="21" y="5.5" width="6" height="6"/>
+        <circle cx="40" cy="8.5" r="2.2"/><circle cx="40" cy="8.5" r="0.7" fill="currentColor"/><path d="M42.4 8.5h2.6M33.5 8.5h4.2"/>
+        <path d="M50 12.8l3.2-7.6 3.2 7.6zM53.2 8.2v2.6"/><path d="M58.6 3.5v11"/>
+      </svg>
 
-      <svg class="art" id="art" viewBox="0 0 374 754" aria-hidden="true" fill="none" stroke="#8B8A86" stroke-width="0.6">
-        <!-- encoder mode group → ring -->
-        <path d="M81 411v31M81 426.5h21l6 6"/>
-        <circle cx="109.6" cy="434.1" r="1.4" fill="#8B8A86" stroke="none"/>
-        <!-- encoder function group → ring -->
-        <path d="M293 411v31M293 426.5h-21l-6 6"/>
-        <circle cx="264.4" cy="434.1" r="1.4" fill="#8B8A86" stroke="none"/>
-        <!-- status LEDs: hairline frame of the indicator row -->
-        <path d="M19 279.5v-3h336v3" stroke="#B3B1AC"/>
+      <!-- manual-style linework -->
+      <svg class="art" viewBox="0 0 380 760" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="0.6">
+        <!-- indicator row frame -->
+        <path d="M22 280.5v-3h336v3"/>
+        <!-- shift bus: from the SHIFT key under every shifted function -->
+        <path d="M45 380.5h290M103 378.5v2M161 378.5v2M219 378.5v2M277 378.5v2M335 378.5v2"/>
+        <path d="M45 377.5v3" stroke-width="1.2"/>
+        <path d="M45 703.5h290M45 701.5v2M190 701.5v2M335 701.5v2"/>
+        <!-- encoder groups → ring -->
+        <path d="M86 399v44M86 421.5h20l5 5"/>
+        <circle cx="112.2" cy="427.6" r="1.4" fill="currentColor" stroke="none"/>
+        <path d="M294 399v44M294 421.5h-20l-5 5"/>
+        <circle cx="267.8" cy="427.6" r="1.4" fill="currentColor" stroke="none"/>
       </svg>
     </div>
   </div>
+
+  <div id="rotate" role="alert" aria-label="Rotate the phone upright">
+    <canvas id="rotateLcd" width="480" height="176"></canvas>
+    <span class="lbl lbl--s">mp-1 works upright</span>
+  </div>
 </div>
 
-<!-- hidden native helpers -->
-<input type="file" id="filePick" class="offscreen" accept="audio/*,.mp3" multiple>
-<label class="offscreen" id="hapticLabel" aria-hidden="true"><input type="checkbox" id="hapticSwitch" switch></label>
+<!-- accessibility: what the display shows, and an adjustable stand-in for the encoder -->
+<div id="srDisplay" class="sr-only" aria-live="polite"></div>
 
+<!-- hidden native helpers -->
+<input type="file" id="filePick" class="offscreen" accept="audio/*,.mp3" multiple tabindex="-1" aria-hidden="true">
+<input type="file" id="restorePick" class="offscreen" accept=".json,application/json" tabindex="-1" aria-hidden="true">
+<label class="offscreen" id="hapticLabel" aria-hidden="true"><input type="checkbox" id="hapticSwitch" switch tabindex="-1"></label>
 <script>
 'use strict';
 /* =========================================================================
@@ -633,20 +704,31 @@ function fitDevice() {
 
 fitDevice();
 
-/* ---------- 2. matte texture (generated once, tiled) -------------------- */
-(function makeNoise() {
+/* ---------- 2. surface textures (generated once, tiled) ------------------
+   Neutral-grey noise, blended soft-light, so one texture works on every
+   edition: brushed streaks for the anodised body, speckle for the rubber. */
+const TEX_GRAIN = 256, TEX_RUBBER = 64;
+function noiseTexture(size, streak, amp) {
   const c = document.createElement('canvas');
-  c.width = c.height = 128;
+  c.width = c.height = size;
   const g = c.getContext('2d');
-  const img = g.createImageData(128, 128);
-  for (let i = 0; i < img.data.length; i += 4) {
-    const v = 128 + (Math.random() - 0.5) * 255;
-    img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
-    img.data[i + 3] = 10;                 // ~4% grain
+  const img = g.createImageData(size, size);
+  for (let y = 0; y < size; y++) {
+    const row = (Math.random() - 0.5) * streak;          // brushing runs along x
+    let run = 0;
+    for (let x = 0; x < size; x++) {
+      run = run * 0.82 + (Math.random() - 0.5) * 0.18;     // long, soft streak noise
+      const v = 128 + (row + run * streak + (Math.random() - 0.5) * (1 - streak)) * amp;
+      const i = (y * size + x) * 4;
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = clamp(v, 0, 255);
+      img.data[i + 3] = 255;
+    }
   }
   g.putImageData(img, 0, 0);
-  document.documentElement.style.setProperty('--noise', `url(${c.toDataURL()})`);
-})();
+  return `url(${c.toDataURL()})`;
+}
+document.documentElement.style.setProperty('--grain', noiseTexture(TEX_GRAIN, 0.85, 46));
+document.documentElement.style.setProperty('--rubber', noiseTexture(TEX_RUBBER, 0, 70));
 
 /* ---------- 3. encoder scale (printed ticks) ---------------------------- */
 (function drawScale() {
@@ -664,9 +746,9 @@ fitDevice();
     if (major) dl += seg; else d += seg;
   }
   const p1 = document.createElementNS(NS, 'path');
-  p1.setAttribute('d', d); p1.setAttribute('stroke', '#8B8A86'); p1.setAttribute('stroke-width', '0.8');
+  p1.setAttribute('d', d); p1.setAttribute('stroke', 'currentColor'); p1.setAttribute('stroke-width', '0.8');
   const p2 = document.createElementNS(NS, 'path');
-  p2.setAttribute('d', dl); p2.setAttribute('stroke', '#4E4F53'); p2.setAttribute('stroke-width', '1.1');
+  p2.setAttribute('d', dl); p2.setAttribute('stroke-width', '1.1'); p2.style.stroke = 'var(--ink-2)';
   svg.append(p1, p2);
   // index mark at 12 o'clock
   const m = document.createElementNS(NS, 'path');
@@ -691,7 +773,8 @@ const S = {
   encMode: 0,              // 0 VOL, 1 SEEK, 2 SCRL
   hold: false,
   wireless: false, wirelessAvail: false,
-  set: { sound: true, haptics: true, bright: 4, theme: 0, out: 'dsp' },
+  set: { sound: true, haptics: true, bright: 4, theme: 0, out: 'dsp', edition: 'orange' },
+  shift: false,
   resumeId: null, resumeT: 0,
 };
 function loadPersisted() {
@@ -855,8 +938,8 @@ $('#hapticSwitch').addEventListener('click', e => e.stopPropagation());
 /* ---------- 7. LEDs ----------------------------------------------------- */
 const LED = {
   el: {
-    pwr: $('#ledPwr'), play: $('#ledPlay'), air: $('#ledAir'), shuf: $('#ledShuf'), rpt: $('#ledRpt'),
-    vol: $('#ledVol'), seek: $('#ledSeek'), scrl: $('#ledScrl'),
+    pwr: $('#ledPwr'), play: $('#ledPlay'), sleep: $('#ledSleep'), air: $('#ledAir'), shuf: $('#ledShuf'), rpt: $('#ledRpt'),
+    vol: $('#ledVol'), seek: $('#ledSeek'), scrl: $('#ledScrl'), spd: $('#ledSpd'),
   },
   state: {},
   set(name, mode) {
@@ -883,9 +966,20 @@ const LED = {
     this.set('vol', m === 0 ? 'on' : 'off');
     this.set('seek', m === 1 ? 'on' : 'off');
     this.set('scrl', m === 2 ? 'on' : 'off');
+    this.set('sleep', S.sleepUntil ? 'on' : 'off');
+    this.set('spd', (S.set.speed || 1) !== 1 ? 'on' : 'off');
   },
 };
 listeners.push(() => LED.sync());
+
+/* ---------- 7b. editions: three anodised finishes, orange stays the hero -- */
+const EDITIONS = ['orange', 'mint', 'graphite'];
+function applyEdition() {
+  const d = $('#device');
+  const e = EDITIONS.includes(S.set.edition) ? S.set.edition : EDITIONS[0];
+  if (d.dataset.edition !== e) d.dataset.edition = e;
+}
+applyEdition();
 
 /* ---------- 8. dot-matrix display: framebuffer + primitives ------------- */
 const LW = 160, LH = 92;
@@ -1097,6 +1191,7 @@ const LCD = {
     for (let y = 0; y < LH; y++) for (let x = 0; x < LW; x++)
       g.clearRect(x * P, y * P, P - gap, P - gap);
     $('#glass').style.setProperty('--lcd-bg', th.bg);
+    $('#lcdType').textContent = th.name.toLowerCase();
     this.palette();
   },
   palette() {
@@ -1676,6 +1771,7 @@ const MENUS = {
       { label: 'DISPLAY', value: THEMES[S.set.theme].name, act: () => { S.set.theme = (S.set.theme + 1) % THEMES.length; LCD.buildMask(); LCD.flicker(160); } },
       { label: 'AUDIO OUT', value: S.set.out === 'dsp' ? 'DSP' : 'DIRECT', act: () => Engine.setOut(S.set.out === 'dsp' ? 'direct' : 'dsp') },
       { label: 'ENCODER', value: ['VOL', 'SEEK', 'SCRL'][S.encMode], act: () => { S.encMode = (S.encMode + 1) % 3; } },
+      { label: 'EDITION', value: S.set.edition.toUpperCase(), act: () => { S.set.edition = EDITIONS[(EDITIONS.indexOf(S.set.edition) + 1) % EDITIONS.length]; } },
       { label: 'CLEAR LIBRARY', accent: true, act: () => {
         if (!S.tracks.length) return toast('LIBRARY EMPTY');
         Nav.open('confirm', { arg: { q: 'CLEAR ALL SONGS?', yes: () => Library.clear() } });
@@ -1785,6 +1881,7 @@ const App = {
   },
   ready() { return S.power === 'on'; },
   keyDown(name) {
+    if (name === 'shift') { S.shift = true; commit(); return; }
     if (!this.ready() || this.locked()) return;
     switch (name) {
       case 'menu': return Nav.stack.length ? Nav.back() : Nav.open('root');
@@ -1799,6 +1896,7 @@ const App = {
     if (name === 'menu' && Nav.stack.length) Nav.home();
   },
   keyUp(name, cancelled, long) {
+    if (name === 'shift') { S.shift = false; commit(); return; }
     if (!this.ready()) return;
     if (name === 'prev' || name === 'next') {
       if (long) return Player.scanStop();
@@ -2540,7 +2638,7 @@ const Library = {
     try { S.tracks = await DB.all(); }
     catch (e) { S.tracks = []; this.dbError = true; }
     Player.rebuildOrder();
-    if (S.tracks.length) {
+    if (S.tracks.length && S.cur < 0) {
       let i = S.tracks.findIndex(t => t.id === S.resumeId);
       if (i < 0) i = 0;
       Player.load(i, { t: i === S.tracks.findIndex(t => t.id === S.resumeId) ? S.resumeT : 0 });
@@ -2990,6 +3088,10 @@ listeners.push(() => {
   KEYS.shuf.el.classList.toggle('active', S.shuffle);
   KEYS.rpt.el.classList.toggle('active', S.repeat > 0);
   KEYS.air.el.classList.toggle('active', S.wireless);
+  KEYS.shift.el.classList.toggle('active', S.shift);
+  KEYS.shift.el.setAttribute('aria-pressed', String(S.shift));
+  $('#device').classList.toggle('is-hold', S.hold);
+  applyEdition();
   KEYS.menu.el.classList.toggle('active', S.screen === 'list');
   KEYS.add.el.classList.toggle('active', typeof Library !== 'undefined' && Library.busy);
 });
