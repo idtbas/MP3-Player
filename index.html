@@ -1184,15 +1184,16 @@ function drawOverlay(t) {
     textC('WRITING TO STORAGE' + '.'.repeat(dotsN), 80, 58, F3, 1);
   } else if (OV.kind === 'air') {
     const age = (t - OV.start) / 1000;
-    if (OV.a) for (let k = 0; k < 3; k++) {
-      const r = (age * 34 + k * 13) % 39;
-      circle(80, 40, Math.round(r), r > 28 ? 1 : 2);
+    clip(0, 10, LW, 62);
+    if (OV.a) for (let k = 0; k < 3; k++) {          // rings radiate from the icon
+      const r = 16 + (age * 26 + k * 9) % 27;
+      circle(80, 37, Math.round(r), r > 34 ? 1 : 2);
     }
-    rect(62, 24, 36, 32, 0);
+    noClip();
     const ic = ICON.air;
     for (let r = 0; r < ic.h; r++) for (let c = 0; c < ic.w; c++)
-      if (ic.rows[r][c] === 'X') rect(70 + c * 3, 30 + r * 3, 3, 3, OV.a ? 3 : 1);
-    if (!OV.a) for (let i = 0; i < 22; i++) rect(69 + i, 51 - i, 2, 1, 2);
+      if (ic.rows[r][c] === 'X') rect(70 + c * 3, 27 + r * 3, 3, 3, OV.a ? 3 : 1);
+    if (!OV.a) for (let i = 0; i < 22; i++) rect(69 + i, 48 - i, 2, 1, 2);
     textC(OV.a ? 'WIRELESS ON' : 'WIRELESS OFF', 80, 66, F5, 2);
     textC(OV.a ? 'AIRPLAY ROUTE ACTIVE' : 'BACK ON DEVICE', 80, 77, F3, 1);
   } else if (OV.kind === 'seek') {
@@ -2110,7 +2111,7 @@ const Covers = {
    visualiser still analyses the real track; it pauses while hidden.       */
 const Engine = {
   dsp: null, dir: null, out: null,
-  an: null, gain: null, graph: false, blessed: false, volOK: null,
+  an: null, gain: null, graph: false, blessed: false, blessing: 0, volOK: null,
   init() {
     const mk = shadow => {
       const a = document.createElement('audio');
@@ -2153,12 +2154,22 @@ const Engine = {
     if (this.blessed) return;
     this.blessed = true;
     for (const a of [this.dsp, this.dir]) {
+      if (!a.paused) continue;                    // already playing for real
       try {
-        const t0 = a.currentTime, had = !!a.currentSrc;
+        const t0 = a.currentTime;
         a.muted = true;
+        this.blessing++;
+        const settle = () => setTimeout(() => { this.blessing--; }, 0);   // after the queued pause event
+        const done = () => {
+          if (!(a === this.out && Player.want)) {
+            a.pause();
+            try { if (a.currentSrc) a.currentTime = t0; } catch (e) {}
+          }
+          a.muted = false;
+          settle();
+        };
         const p = a.play();
-        const done = () => { if (a !== this.out || !S.playing) a.pause(); a.muted = false; if (had && !S.playing) try { a.currentTime = t0; } catch (e) {} };
-        if (p && p.then) p.then(done, () => { a.muted = false; }); else done();
+        if (p && p.then) p.then(done, () => { a.muted = false; settle(); }); else done();
       } catch (e) { a.muted = false; }
     }
   },
@@ -2249,7 +2260,7 @@ const Engine = {
 
 /* ---------- 22. player: queue, transport, shuffle/repeat ---------------- */
 const Player = {
-  urls: new Map(), order: [], token: 0, pendingSeek: 0, quiet: false, wantPause: false,
+  urls: new Map(), order: [], token: 0, pendingSeek: 0, quiet: false, wantPause: false, want: false,
   scanTimer: 0, scanT0: 0, lastSave: 0, retry: new Set(), bad: new Set(), errSkips: 0,
   cur() { return S.tracks[S.cur]; },
   rebuildOrder() {
@@ -2326,16 +2337,19 @@ const Player = {
     if (!S.tracks.length) { Snd.err(); toast('NO SONGS', 'PRESS 02 ADD'); return; }
     if (S.cur < 0 || !Engine.out.getAttribute('src')) return this.load(Math.max(0, S.cur), { play: true, t: S.t });
     this.wantPause = false;
+    this.want = true;
+    Interrupt.pausedBySystem = false;
     S.playing = true; commit();
     const p = Engine.play();
     if (p && p.catch) p.catch(err => {
       if (err && err.name === 'AbortError') return;
-      S.playing = false; commit();
+      S.playing = false; this.want = false; commit();
       if (err && err.name === 'NotAllowedError') toast('TAP PLAY', 'IOS NEEDS A TAP', 1400);
     });
   },
   pause() {
     this.wantPause = true;
+    this.want = false;
     S.playing = false;
     Engine.pause();
     savePersisted(true);
@@ -2413,13 +2427,17 @@ const Player = {
   scanStop() { clearInterval(this.scanTimer); this.scanTimer = 0; },
   fail(tr, why) {
     this.bad.add(tr.id);
+    this.wantPause = true;
+    this.want = false;
+    Engine.pause();
     S.playing = false; commit();
     toast("CAN'T PLAY", why || tr.title, 1600);
     Snd.err();
-    if (this.bad.size >= S.tracks.length) return;     // nothing playable left
-    setTimeout(() => { if (this.cur() === tr) this.next(false); }, 1300);
+    if (S.tracks.every(t => this.bad.has(t.id))) return;   // nothing playable left
+    setTimeout(() => { if (this.cur() === tr) { this.wantPause = false; this.next(true); } }, 1300);
   },
   onMedia(type, a, e) {
+    if (Engine.blessing > 0 && (type === 'play' || type === 'playing' || type === 'pause' || type === 'seeked' || type === 'timeupdate')) return;
     switch (type) {
       case 'loadedmetadata':
       case 'durationchange': {
@@ -2445,7 +2463,8 @@ const Player = {
         break;
       }
       case 'play': case 'playing':
-        if (!this.wantPause) { S.playing = true; this.errSkips = 0; this.retry.delete((this.cur() || {}).id); }
+        if (!this.wantPause) S.playing = true;
+        if (type === 'playing' && a.readyState >= 3) { const c = this.cur(); if (c) { this.retry.delete(c.id); this.bad.delete(c.id); } }
         Engine.sync(true);
         MS.state();
         commit();
@@ -2454,6 +2473,7 @@ const Player = {
         if (this.quiet || a.ended) break;
         if (!this.wantPause && S.playing) Interrupt.systemPaused();
         S.playing = false;
+        this.want = false;
         Engine.sync();
         MS.state();
         commit();
@@ -2469,7 +2489,7 @@ const Player = {
       }
       case 'error': {
         const tr = this.cur();
-        if (!tr || !a.getAttribute('src')) break;
+        if (!tr || !a.getAttribute('src') || this.bad.has(tr.id)) break;
         if (!this.retry.has(tr.id)) {              // retry once from an in-memory copy
           this.retry.add(tr.id);
           this.load(S.cur, { play: S.playing, t: S.t, fresh: true });
