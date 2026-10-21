@@ -3945,6 +3945,10 @@ $('#filePick').addEventListener('change', e => Library.import(e.target.files));
    favourites, play counts, order, queue, recent and settings. Songs are
    matched back by file name + size, or by title + artist + size.         */
 const BACKUP_KIND = 'mp1-library-backup', BACKUP_FORMAT = 1;
+/* a viewer that frames this page may offer its own save dialog ('downloads');
+   anywhere else this resolves to null and the phone's share sheet is used  */
+const HOST_DOWNLOADS = window.claude && typeof window.claude.use === 'function'
+  ? Promise.resolve().then(() => window.claude.use('downloads')).catch(() => null) : Promise.resolve(null);
 const trackKey = t => `${t.name}|${t.size}`;
 const trackKey2 = t => `${fold(t.title)}|${fold(t.artist)}|${t.size}`;
 const Backup = {
@@ -3959,21 +3963,33 @@ const Backup = {
       recent: S.recent.map(r => ({ key: key(r.id), t: r.t })).filter(r => r.key),
     };
   },
-  save() {
+  async save() {
     if (!S.tracks.length) return toast('NOTHING TO BACK UP', 'LIBRARY IS EMPTY');
-    const stamp = new Date().toISOString().slice(0, 10);
-    const file = new File([JSON.stringify(this.build(), null, 1)], `mp1-backup-${stamp}.json`, { type: 'application/json' });
+    const stamp = new Date().toISOString().slice(0, 10), name = `mp1-backup-${stamp}.json`;
+    const json = JSON.stringify(this.build(), null, 1);
     const done = () => toast('BACKUP SAVED', `${S.tracks.length} SONGS · NO AUDIO`, 1600);
     const fail = () => fault('BACKUP FAILED', 'SAVING FILES IS BLOCKED HERE', 'OPEN MP-1 FROM ITS OWN ADDRESS');
+    // inside a sandboxed preview frame a download link does nothing: use the
+    // host's own save dialog when it offers one, otherwise say so honestly
+    let framed = true;
+    try { framed = window.self !== window.top; } catch (e) {}
+    if (framed) {
+      const dl = await HOST_DOWNLOADS;
+      if (!dl) return fail();
+      try { await dl.save({ filename: name, data: json }); return done(); }
+      catch (e) {
+        const code = e && e.code;
+        if (code === 'declined') return toast('BACKUP CANCELLED', null, 1000);
+        if (code === 'rate_limited') return toast('ONE MOMENT', 'A SAVE IS ALREADY OPEN', 1200);
+        return fail();
+      }
+    }
+    const file = new File([json], name, { type: 'application/json' });
     try {
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         navigator.share({ files: [file], title: 'MP-1 backup' }).then(done, e => { if (!e || e.name !== 'AbortError') fail(); });
         return;
       }
-      // inside a sandboxed preview frame a download link does nothing: say so instead of claiming success
-      let framed = true;
-      try { framed = window.self !== window.top; } catch (e) {}
-      if (framed) return fail();
       const u = URL.createObjectURL(file), a = document.createElement('a');
       a.href = u; a.download = file.name;
       document.body.appendChild(a); a.click(); a.remove();
